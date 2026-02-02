@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
 from ..database import get_db
-from ..models import Lead, AutomationSettings, InvitationLog, BusinessProfile
+from ..models import Lead, AutomationSettings, InvitationLog, BusinessProfile, Campaign
 from ..models.lead import LeadStatus
 from ..schemas.automation import (
     AutomationSettingsResponse,
@@ -163,6 +163,13 @@ async def send_next_invitation(
         Lead.linkedin_message.isnot(None)
     )
 
+    # Apply campaign filter if set
+    campaign_name = None
+    if settings.target_campaign_id:
+        query = query.filter(Lead.campaign_id == settings.target_campaign_id)
+        campaign = db.query(Campaign).filter(Campaign.id == settings.target_campaign_id).first()
+        campaign_name = campaign.name if campaign else None
+
     # Apply score filter
     if settings.min_lead_score > 0:
         query = query.filter(Lead.score >= settings.min_lead_score)
@@ -171,9 +178,10 @@ async def send_next_invitation(
     lead = query.order_by(Lead.created_at).first()
 
     if not lead:
+        campaign_hint = f" in campaign '{campaign_name}'" if campaign_name else ""
         return {
             "sent": False,
-            "reason": "No eligible leads found. Make sure leads have LinkedIn URL and generated message.",
+            "reason": f"No eligible leads found{campaign_hint}. Make sure leads have LinkedIn URL and generated message.",
             "invitations_today": settings.invitations_sent_today
         }
 
@@ -181,11 +189,21 @@ async def send_next_invitation(
     unipile = UnipileService()
     result = await unipile.send_invitation_by_url(lead.linkedin_url, lead.linkedin_message)
 
-    # Log the attempt
+    # Get campaign name for the log
+    if not campaign_name and lead.campaign_id:
+        campaign = db.query(Campaign).filter(Campaign.id == lead.campaign_id).first()
+        campaign_name = campaign.name if campaign else None
+
+    # Log the attempt with full details
     log = InvitationLog(
         lead_id=lead.id,
         lead_name=f"{lead.first_name} {lead.last_name}",
         lead_company=lead.company_name,
+        lead_job_title=lead.job_title,
+        lead_linkedin_url=lead.linkedin_url,
+        message_preview=lead.linkedin_message[:300] if lead.linkedin_message else None,
+        campaign_id=lead.campaign_id,
+        campaign_name=campaign_name,
         success=result.get("success", False),
         error_message=result.get("error") if not result.get("success") else None,
         mode="automatic"
@@ -285,6 +303,70 @@ def get_invitation_stats(db: Session = Depends(get_db)):
         success_rate=round(success_rate, 1),
         by_day=by_day
     )
+
+
+@router.get("/queue")
+def get_invitation_queue(
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+    """
+    Get the next leads in the invitation queue.
+    Shows what will be sent next based on current settings.
+    """
+    settings = get_or_create_settings(db)
+    target_statuses = settings.target_statuses.split(",")
+
+    query = db.query(Lead).filter(
+        Lead.status.in_(target_statuses),
+        Lead.linkedin_url.isnot(None),
+        Lead.linkedin_message.isnot(None)
+    )
+
+    # Apply campaign filter if set
+    if settings.target_campaign_id:
+        query = query.filter(Lead.campaign_id == settings.target_campaign_id)
+
+    # Apply score filter
+    if settings.min_lead_score > 0:
+        query = query.filter(Lead.score >= settings.min_lead_score)
+
+    # Get total count
+    total_eligible = query.count()
+
+    # Get next leads in queue
+    leads = query.order_by(Lead.created_at).limit(limit).all()
+
+    queue = []
+    for lead in leads:
+        # Get campaign name
+        campaign_name = None
+        if lead.campaign_id:
+            campaign = db.query(Campaign).filter(Campaign.id == lead.campaign_id).first()
+            campaign_name = campaign.name if campaign else None
+
+        queue.append({
+            "lead_id": lead.id,
+            "lead_name": f"{lead.first_name} {lead.last_name}",
+            "job_title": lead.job_title,
+            "company": lead.company_name,
+            "linkedin_url": lead.linkedin_url,
+            "message_preview": lead.linkedin_message[:100] + "..." if lead.linkedin_message and len(lead.linkedin_message) > 100 else lead.linkedin_message,
+            "score": lead.score,
+            "score_label": lead.score_label,
+            "campaign_id": lead.campaign_id,
+            "campaign_name": campaign_name,
+        })
+
+    return {
+        "total_eligible": total_eligible,
+        "queue": queue,
+        "settings": {
+            "target_campaign_id": settings.target_campaign_id,
+            "min_lead_score": settings.min_lead_score,
+            "target_statuses": target_statuses
+        }
+    }
 
 
 @router.post("/generate-messages")

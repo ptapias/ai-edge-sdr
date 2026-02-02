@@ -318,6 +318,7 @@ export interface AutomationSettings {
   max_delay_seconds: number
   min_lead_score: number
   target_statuses: string
+  target_campaign_id: string | null
   invitations_sent_today: number
   last_invitation_at: string | null
   last_reset_date: string | null
@@ -349,10 +350,38 @@ export interface InvitationLog {
   lead_id: string
   lead_name: string | null
   lead_company: string | null
+  lead_job_title: string | null
+  lead_linkedin_url: string | null
+  message_preview: string | null
+  campaign_id: string | null
+  campaign_name: string | null
   success: boolean
   error_message: string | null
   sent_at: string
   mode: string
+}
+
+export interface QueueLead {
+  lead_id: string
+  lead_name: string
+  job_title: string | null
+  company: string | null
+  linkedin_url: string | null
+  message_preview: string | null
+  score: number | null
+  score_label: string | null
+  campaign_id: string | null
+  campaign_name: string | null
+}
+
+export interface InvitationQueue {
+  total_eligible: number
+  queue: QueueLead[]
+  settings: {
+    target_campaign_id: string | null
+    min_lead_score: number
+    target_statuses: string[]
+  }
 }
 
 export const getAutomationSettings = async (): Promise<AutomationSettings> => {
@@ -395,6 +424,11 @@ export const getInvitationStats = async (): Promise<InvitationStats> => {
 
 export const generatePendingMessages = async (limit = 10) => {
   const response = await api.post('/automation/generate-messages', null, { params: { limit } })
+  return response.data
+}
+
+export const getInvitationQueue = async (limit = 10): Promise<InvitationQueue> => {
+  const response = await api.get('/automation/queue', { params: { limit } })
   return response.data
 }
 

@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { Search, Users, BarChart3, Settings, Zap, MessageSquare } from 'lucide-react'
+import { Search, Users, BarChart3, Settings, Link2, MessageSquare } from 'lucide-react'
 import SearchPage from './pages/SearchPage'
 import LeadsPage from './pages/LeadsPage'
 import DashboardPage from './pages/DashboardPage'
@@ -82,8 +82,8 @@ function App() {
                       }`
                     }
                   >
-                    <Zap className="w-4 h-4 mr-2" />
-                    Automation
+                    <Link2 className="w-4 h-4 mr-2" />
+                    Connections
                   </NavLink>
                   <NavLink
                     to="/settings"

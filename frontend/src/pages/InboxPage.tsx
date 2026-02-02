@@ -234,10 +234,14 @@ export default function InboxPage() {
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null)
   const [messageText, setMessageText] = useState('')
   const [generatingReply, setGeneratingReply] = useState(false)
-  const [conversationAnalysis, setConversationAnalysis] = useState<ConversationAnalysis | null>(null)
+  // Cache analysis per chat ID
+  const [analysisCache, setAnalysisCache] = useState<Record<string, ConversationAnalysis>>({})
   const [analyzingConversation, setAnalyzingConversation] = useState(false)
   const [forceRefreshing, setForceRefreshing] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Get cached analysis for current chat
+  const conversationAnalysis = selectedChat ? analysisCache[selectedChat.id] : null
 
   // Fetch chats - uses backend cache (30-60 min)
   // refetchInterval is disabled since backend handles caching
@@ -257,10 +261,7 @@ export default function InboxPage() {
     refetchOnWindowFocus: false,
   })
 
-  // Reset analysis when chat changes
-  useEffect(() => {
-    setConversationAnalysis(null)
-  }, [selectedChat?.id])
+  // Analysis is now cached per chat ID, no need to reset
 
   // Fetch leads to match with chats
   const { data: leadsData } = useQuery({
@@ -268,13 +269,53 @@ export default function InboxPage() {
     queryFn: () => getLeads(1, 200),
   })
 
-  // Send message mutation
+  // Send message mutation - optimistically add message to UI
   const sendMutation = useMutation({
     mutationFn: ({ chatId, text }: { chatId: string; text: string }) =>
       sendChatMessage(chatId, text),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['chat-messages', selectedChat?.id] })
+    onMutate: async ({ text }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['chat-messages', selectedChat?.id] })
+
+      // Snapshot the previous value
+      const previousMessages = queryClient.getQueryData(['chat-messages', selectedChat?.id])
+
+      // Optimistically add the new message to the UI
+      const optimisticMessage: Message = {
+        id: `temp-${Date.now()}`,
+        text: text,
+        is_sender: 1, // Outbound
+        timestamp: new Date().toISOString(),
+      }
+
+      queryClient.setQueryData(['chat-messages', selectedChat?.id], (old: unknown) => {
+        if (!old) return { data: { items: [optimisticMessage] } }
+        const oldData = old as { data?: { items?: Message[] } }
+        const items = oldData?.data?.items || []
+        return {
+          ...oldData,
+          data: {
+            ...oldData?.data,
+            items: [...items, optimisticMessage]
+          }
+        }
+      })
+
       setMessageText('')
+
+      return { previousMessages }
+    },
+    onError: (_err, _variables, context) => {
+      // Rollback on error
+      if (context?.previousMessages) {
+        queryClient.setQueryData(['chat-messages', selectedChat?.id], context.previousMessages)
+      }
+    },
+    onSettled: () => {
+      // Refresh after a short delay to get the real message from API
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['chat-messages', selectedChat?.id] })
+      }, 2000)
     },
   })
 
@@ -361,7 +402,7 @@ export default function InboxPage() {
     }
   }
 
-  // Handle conversation analysis
+  // Handle conversation analysis - results are cached per chat
   const handleAnalyzeConversation = async () => {
     if (!selectedChat || sortedMessages.length === 0 || analyzingConversation) return
 
@@ -375,7 +416,11 @@ export default function InboxPage() {
       }
 
       const analysis = await analyzeConversation(conversationHistory.trim())
-      setConversationAnalysis(analysis)
+      // Save to cache
+      setAnalysisCache(prev => ({
+        ...prev,
+        [selectedChat.id]: analysis
+      }))
     } catch (error) {
       console.error('Analysis failed:', error)
     } finally {

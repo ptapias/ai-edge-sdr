@@ -19,6 +19,7 @@ class AutomationSettingsBase(BaseModel):
     max_delay_seconds: int = Field(300, ge=60, le=7200)
     min_lead_score: int = Field(0, ge=0, le=100)
     target_statuses: str = "new,pending"
+    target_campaign_id: Optional[str] = None  # Filter by campaign
 
 
 class AutomationSettingsUpdate(BaseModel):
@@ -34,6 +35,7 @@ class AutomationSettingsUpdate(BaseModel):
     max_delay_seconds: Optional[int] = Field(None, ge=60, le=7200)
     min_lead_score: Optional[int] = Field(None, ge=0, le=100)
     target_statuses: Optional[str] = None
+    target_campaign_id: Optional[str] = None  # Filter by campaign (null = all campaigns)
 
 
 class AutomationSettingsResponse(AutomationSettingsBase):
@@ -66,6 +68,11 @@ class InvitationLogResponse(BaseModel):
     lead_id: str
     lead_name: Optional[str]
     lead_company: Optional[str]
+    lead_job_title: Optional[str]
+    lead_linkedin_url: Optional[str]
+    message_preview: Optional[str]
+    campaign_id: Optional[str]
+    campaign_name: Optional[str]
     success: bool
     error_message: Optional[str]
     sent_at: datetime

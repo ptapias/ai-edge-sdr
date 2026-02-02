@@ -40,6 +40,10 @@ class AutomationSettings(Base):
     # Default: send to new and pending
     target_statuses = Column(String(200), default="new,pending")
 
+    # Campaign filter - only send to leads from this campaign
+    # If None, send to all eligible leads
+    target_campaign_id = Column(String(36), nullable=True)
+
     # Tracking
     invitations_sent_today = Column(Integer, default=0)
     last_invitation_at = Column(DateTime, nullable=True)
@@ -100,6 +104,11 @@ class InvitationLog(Base):
     lead_id = Column(String(36), nullable=False)
     lead_name = Column(String(200), nullable=True)
     lead_company = Column(String(200), nullable=True)
+    lead_job_title = Column(String(200), nullable=True)
+    lead_linkedin_url = Column(String(500), nullable=True)
+    message_preview = Column(String(300), nullable=True)  # First 300 chars of message
+    campaign_id = Column(String(36), nullable=True)
+    campaign_name = Column(String(200), nullable=True)
 
     # Result
     success = Column(Boolean, default=False)
