@@ -239,13 +239,51 @@ export const sendBulkInvitations = async (leadIds: string[]): Promise<BulkInvita
   return response.data
 }
 
-export const getLinkedInChats = async (limit = 50) => {
-  const response = await api.get('/linkedin/chats', { params: { limit } })
+export interface CacheInfo {
+  cached: boolean
+  is_fresh?: boolean
+  expires_in_seconds: number
+  last_api_call: string | null
+}
+
+export interface ChatsResponse {
+  success: boolean
+  data: {
+    items: unknown[]
+  }
+  from_cache?: boolean
+  cache_info?: CacheInfo
+}
+
+export interface ConversationAnalysis {
+  level: 'hot' | 'warm' | 'cold'
+  reason: string
+  next_action: string
+}
+
+export const getLinkedInChats = async (limit = 50, forceRefresh = false): Promise<ChatsResponse> => {
+  const response = await api.get('/linkedin/chats', {
+    params: { limit, force_refresh: forceRefresh }
+  })
   return response.data
 }
 
-export const getChatMessages = async (chatId: string, limit = 50) => {
-  const response = await api.get(`/linkedin/chats/${chatId}/messages`, { params: { limit } })
+export const getChatMessages = async (chatId: string, limit = 50, forceRefresh = false) => {
+  const response = await api.get(`/linkedin/chats/${chatId}/messages`, {
+    params: { limit, force_refresh: forceRefresh }
+  })
+  return response.data
+}
+
+export const getLinkedInCacheStatus = async () => {
+  const response = await api.get('/linkedin/cache-status')
+  return response.data
+}
+
+export const analyzeConversation = async (conversationHistory: string): Promise<ConversationAnalysis> => {
+  const response = await api.post('/linkedin/analyze-conversation', {
+    conversation_history: conversationHistory
+  })
   return response.data
 }
 

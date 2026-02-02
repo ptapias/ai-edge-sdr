@@ -1,5 +1,10 @@
 """
 LinkedIn router for Unipile API operations.
+
+CRITICAL: Uses caching to prevent LinkedIn bans from excessive API calls.
+- Chat list: 30-60 min cache
+- Profiles: 24-30 hour cache
+- Messages: 5-10 min cache
 """
 import logging
 from typing import Optional, List
@@ -14,6 +19,7 @@ from ..models import Lead
 from ..models.lead import LeadStatus
 from ..services.unipile_service import UnipileService
 from ..services.claude_service import ClaudeService
+from ..services.cache_service import get_unipile_cache
 from ..models import BusinessProfile
 
 logger = logging.getLogger(__name__)
@@ -42,6 +48,28 @@ async def check_linkedin_connection():
     unipile = UnipileService()
     result = await unipile.check_connection_status()
     return result
+
+
+@router.get("/cache-status")
+async def get_cache_status():
+    """
+    Get cache status for all Unipile data.
+
+    Returns info about when data will refresh to help understand API call frequency.
+    IMPORTANT: This helps monitor that we're not making too many LinkedIn API calls.
+    """
+    cache = get_unipile_cache()
+    chats_info = cache.get_chats_cache_info()
+
+    return {
+        "chats": chats_info,
+        "message": "Cache helps prevent LinkedIn bans by limiting API calls",
+        "refresh_intervals": {
+            "chats": "30-60 minutes (random)",
+            "profiles": "24-30 hours (random)",
+            "messages": "5-10 minutes (random)"
+        }
+    }
 
 
 @router.post("/send-invitation")
@@ -172,20 +200,25 @@ async def send_bulk_invitations(
 @router.get("/chats")
 async def get_linkedin_chats(
     limit: int = Query(50, ge=1, le=100),
-    enrich: bool = Query(True, description="Enrich chats with attendee profile info")
+    enrich: bool = Query(True, description="Enrich chats with attendee profile info"),
+    force_refresh: bool = Query(False, description="Force refresh from LinkedIn API (use sparingly!)")
 ):
     """
     Get LinkedIn chats from Unipile, optionally enriched with attendee profile info.
 
+    IMPORTANT: Results are cached 30-60 min to prevent LinkedIn bans.
+    Only use force_refresh when absolutely necessary.
+
     Args:
         limit: Maximum number of chats to return
         enrich: Whether to fetch attendee profile details (name, job title)
+        force_refresh: Bypass cache (use sparingly to avoid LinkedIn ban!)
 
     Returns:
-        List of chats with enriched attendee information
+        List of chats with enriched attendee information and cache info
     """
     unipile = UnipileService()
-    result = await unipile.get_chats(limit=limit)
+    result = await unipile.get_chats(limit=limit, force_refresh=force_refresh)
 
     if not result.get("success") or not enrich:
         return result
@@ -247,20 +280,50 @@ async def get_linkedin_chats(
 @router.get("/chats/{chat_id}/messages")
 async def get_chat_messages(
     chat_id: str,
-    limit: int = Query(50, ge=1, le=100)
+    limit: int = Query(50, ge=1, le=100),
+    force_refresh: bool = Query(False, description="Force refresh from LinkedIn API"),
+    analyze: bool = Query(False, description="Analyze conversation sentiment (only on new messages)")
 ):
     """
     Get messages from a specific LinkedIn chat.
 
+    IMPORTANT: Results are cached 5-10 min to prevent LinkedIn bans.
+    Conversation analysis only runs when there are new messages.
+
     Args:
         chat_id: Unipile chat ID
         limit: Maximum number of messages to return
+        force_refresh: Bypass cache (use sparingly!)
+        analyze: Run sentiment analysis if there are new messages
 
     Returns:
-        List of messages
+        List of messages with cache info and optional analysis
     """
     unipile = UnipileService()
-    result = await unipile.get_chat_messages(chat_id, limit=limit)
+    result = await unipile.get_chat_messages(chat_id, limit=limit, force_refresh=force_refresh)
+
+    # Only analyze if requested AND there are new messages (to save API calls)
+    if analyze and result.get("success") and result.get("has_new_messages"):
+        try:
+            # Get messages for analysis
+            messages_data = result.get("data", {})
+            messages_list = messages_data.get("items", []) if isinstance(messages_data, dict) else messages_data
+
+            if messages_list:
+                # Format conversation for analysis
+                conversation_text = []
+                for msg in reversed(messages_list[-10:]):  # Last 10 messages
+                    sender = "You" if msg.get("is_sender") == 1 else "Contact"
+                    text = msg.get("text", msg.get("body", ""))
+                    conversation_text.append(f"{sender}: {text}")
+
+                # Analyze with Claude
+                claude = ClaudeService()
+                analysis = claude.analyze_conversation_sentiment("\n".join(conversation_text))
+                result["analysis"] = analysis
+        except Exception as e:
+            logger.warning(f"Failed to analyze conversation: {e}")
+
     return result
 
 
@@ -319,6 +382,11 @@ class GenerateReplyRequest(BaseModel):
     contact_company: Optional[str] = None
 
 
+class AnalyzeConversationRequest(BaseModel):
+    """Request to analyze conversation sentiment."""
+    conversation_history: str  # Formatted conversation history
+
+
 @router.post("/generate-reply")
 def generate_conversation_reply(
     request: GenerateReplyRequest,
@@ -361,4 +429,26 @@ def generate_conversation_reply(
     return {
         "reply": reply,
         "length": len(reply)
+    }
+
+
+@router.post("/analyze-conversation")
+def analyze_conversation(request: AnalyzeConversationRequest):
+    """
+    Analyze a conversation to determine engagement level (hot/warm/cold).
+
+    IMPORTANT: Only call this when there are new messages to save API costs.
+
+    Args:
+        request: Conversation history text
+
+    Returns:
+        Analysis with level, reason, and next_action
+    """
+    claude = ClaudeService()
+    analysis = claude.analyze_conversation_sentiment(request.conversation_history)
+
+    return {
+        "success": True,
+        **analysis
     }

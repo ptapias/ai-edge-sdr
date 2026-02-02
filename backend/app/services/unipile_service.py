@@ -1,5 +1,10 @@
 """
 Unipile service for LinkedIn automation via Unipile API.
+
+CRITICAL: Uses caching to prevent excessive API calls and LinkedIn bans.
+- Chats: cached 30-60 min (random)
+- Profiles: cached 24-30 hours (random)
+- Messages: cached 5-10 min (random)
 """
 import logging
 import re
@@ -7,6 +12,7 @@ from typing import Dict, Any, Optional, List
 import httpx
 
 from ..config import get_settings
+from .cache_service import get_unipile_cache
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -50,16 +56,32 @@ class UnipileService:
 
         return None
 
-    async def get_user_info(self, provider_id: str) -> Dict[str, Any]:
+    async def get_user_info(self, provider_id: str, force_refresh: bool = False) -> Dict[str, Any]:
         """
-        Get LinkedIn user information.
+        Get LinkedIn user information (cached 24-30 hours).
 
         Args:
             provider_id: LinkedIn username/provider ID
+            force_refresh: If True, bypass cache
 
         Returns:
             User information from Unipile
         """
+        cache = get_unipile_cache()
+
+        # Check cache first (profiles are stable, cache 24+ hours)
+        if not force_refresh:
+            cached_data, is_fresh = cache.get_profile(provider_id)
+            if cached_data is not None and is_fresh:
+                logger.debug(f"Profile cache HIT for {provider_id}")
+                return {
+                    "success": True,
+                    "data": cached_data,
+                    "from_cache": True
+                }
+
+        # Cache miss or expired - make API call
+        logger.info(f"Profile cache MISS for {provider_id} - fetching from API")
         url = f"{self.base_url}/users/{provider_id}"
         params = {"account_id": self.account_id}
 
@@ -73,9 +95,13 @@ class UnipileService:
                 )
 
                 if response.status_code == 200:
+                    data = response.json()
+                    # Store in cache
+                    cache.set_profile(provider_id, data)
                     return {
                         "success": True,
-                        "data": response.json()
+                        "data": data,
+                        "from_cache": False
                     }
                 else:
                     logger.error(f"Failed to get user info: {response.status_code} - {response.text}")
@@ -171,16 +197,37 @@ class UnipileService:
 
         return await self.send_invitation(provider_id, message)
 
-    async def get_chats(self, limit: int = 50) -> Dict[str, Any]:
+    async def get_chats(self, limit: int = 50, force_refresh: bool = False) -> Dict[str, Any]:
         """
-        Get LinkedIn chat list.
+        Get LinkedIn chat list (cached 30-60 min with random jitter).
+
+        IMPORTANT: This cache prevents excessive API calls to LinkedIn.
+        The random TTL simulates human behavior.
 
         Args:
             limit: Maximum number of chats to return
+            force_refresh: If True, bypass cache
 
         Returns:
-            List of chats
+            List of chats with cache metadata
         """
+        cache = get_unipile_cache()
+
+        # Check cache first
+        if not force_refresh:
+            cached_data, is_fresh = cache.get_chats()
+            if cached_data is not None and is_fresh:
+                cache_info = cache.get_chats_cache_info()
+                logger.debug(f"Chats cache HIT - expires in {cache_info['expires_in_seconds']}s")
+                return {
+                    "success": True,
+                    "data": cached_data,
+                    "from_cache": True,
+                    "cache_info": cache_info
+                }
+
+        # Cache miss or expired - make API call
+        logger.info("Chats cache MISS - fetching from LinkedIn API")
         url = f"{self.base_url}/chats"
         params = {
             "account_id": self.account_id,
@@ -197,9 +244,15 @@ class UnipileService:
                 )
 
                 if response.status_code == 200:
+                    data = response.json()
+                    # Store in cache with random TTL (30-60 min)
+                    cache.set_chats(data)
+                    cache_info = cache.get_chats_cache_info()
                     return {
                         "success": True,
-                        "data": response.json()
+                        "data": data,
+                        "from_cache": False,
+                        "cache_info": cache_info
                     }
                 else:
                     logger.error(f"Failed to get chats: {response.status_code} - {response.text}")
@@ -219,18 +272,36 @@ class UnipileService:
     async def get_chat_messages(
         self,
         chat_id: str,
-        limit: int = 50
+        limit: int = 50,
+        force_refresh: bool = False
     ) -> Dict[str, Any]:
         """
-        Get messages from a specific chat.
+        Get messages from a specific chat (cached 5-10 min with random jitter).
 
         Args:
             chat_id: Chat ID from Unipile
             limit: Maximum number of messages to return
+            force_refresh: If True, bypass cache
 
         Returns:
-            List of messages
+            List of messages with has_new_messages flag
         """
+        cache = get_unipile_cache()
+
+        # Check cache first
+        if not force_refresh:
+            cached_data, is_fresh, _ = cache.get_messages(chat_id)
+            if cached_data is not None and is_fresh:
+                logger.debug(f"Messages cache HIT for chat {chat_id}")
+                return {
+                    "success": True,
+                    "data": cached_data,
+                    "from_cache": True,
+                    "has_new_messages": False
+                }
+
+        # Cache miss or expired - make API call
+        logger.info(f"Messages cache MISS for chat {chat_id} - fetching from API")
         url = f"{self.base_url}/chats/{chat_id}/messages"
         params = {
             "account_id": self.account_id,
@@ -247,9 +318,16 @@ class UnipileService:
                 )
 
                 if response.status_code == 200:
+                    data = response.json()
+                    # Extract messages list for hash comparison
+                    messages_list = data.get("items", []) if isinstance(data, dict) else data
+                    # Store in cache and check for new messages
+                    has_new_messages = cache.set_messages(chat_id, data, messages_list)
                     return {
                         "success": True,
-                        "data": response.json()
+                        "data": data,
+                        "from_cache": False,
+                        "has_new_messages": has_new_messages
                     }
                 else:
                     logger.error(f"Failed to get messages: {response.status_code} - {response.text}")

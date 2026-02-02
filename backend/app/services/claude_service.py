@@ -411,3 +411,86 @@ Write the reply:"""
         result = result.replace("```", "").replace("`", "").strip()
 
         return result
+
+    def analyze_conversation_sentiment(
+        self,
+        conversation_text: str
+    ) -> Dict[str, Any]:
+        """
+        Analyze a conversation to determine engagement level.
+
+        IMPORTANT: Only call this when there are NEW messages to save API costs.
+
+        Args:
+            conversation_text: Formatted conversation text
+
+        Returns:
+            Dictionary with:
+            - level: "hot" | "warm" | "cold"
+            - reason: Brief explanation
+            - next_action: Suggested next step
+        """
+        system_prompt = """You are a sales conversation analyst. Analyze LinkedIn conversations to determine engagement level.
+
+OUTPUT JSON:
+{
+  "level": "hot" | "warm" | "cold",
+  "reason": "1 sentence explanation",
+  "next_action": "Suggested next step"
+}
+
+CRITERIA:
+HOT (high engagement):
+- They asked about your product/service
+- They proposed a meeting/call
+- They're asking pricing or availability
+- They shared their specific needs/problems
+- Multiple back-and-forth with substance
+
+WARM (moderate engagement):
+- They're responding but with short answers
+- Some interest but no clear intent yet
+- Asking general questions
+- Polite engagement but not driving forward
+
+COLD (low/no engagement):
+- One-word responses
+- Long gaps between replies
+- Deflecting or changing subject
+- No questions back
+- "Thanks but not interested" signals
+
+Be direct and concise."""
+
+        user_content = f"""Analyze this LinkedIn conversation:
+
+{conversation_text}
+
+Determine engagement level:"""
+
+        try:
+            message = self.client.messages.create(
+                model=self.model,
+                max_tokens=200,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_content}]
+            )
+
+            response_text = message.content[0].text
+
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "```" in response_text:
+                json_str = response_text.split("```")[1].split("```")[0]
+            else:
+                json_str = response_text
+
+            return json.loads(json_str.strip())
+
+        except Exception as e:
+            logger.error(f"Failed to analyze conversation: {e}")
+            return {
+                "level": "warm",
+                "reason": "Could not analyze conversation",
+                "next_action": "Continue engagement"
+            }

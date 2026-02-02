@@ -10,7 +10,12 @@ import {
   Clock,
   Sparkles,
   ChevronRight,
-  AlertCircle
+  AlertCircle,
+  Shield,
+  Flame,
+  Thermometer,
+  Snowflake,
+  AlertTriangle
 } from 'lucide-react'
 import {
   getLinkedInChats,
@@ -18,7 +23,9 @@ import {
   sendChatMessage,
   getLeads,
   generateConversationReply,
+  analyzeConversation,
   type Lead,
+  type ConversationAnalysis
 } from '../services/api'
 
 // Unipile API attendee structure
@@ -176,27 +183,84 @@ function isMessageOutbound(msg: Message): boolean {
   return false
 }
 
+// Format seconds to human readable time
+function formatCacheTime(seconds: number): string {
+  if (seconds <= 0) return 'Refreshing...'
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  if (mins > 0) return `${mins}m ${secs}s`
+  return `${secs}s`
+}
+
+// Sentiment badge component
+function SentimentBadge({ analysis }: { analysis: ConversationAnalysis }) {
+  const levelConfig = {
+    hot: {
+      icon: Flame,
+      bg: 'bg-red-100',
+      text: 'text-red-700',
+      border: 'border-red-200',
+      label: 'Hot'
+    },
+    warm: {
+      icon: Thermometer,
+      bg: 'bg-orange-100',
+      text: 'text-orange-700',
+      border: 'border-orange-200',
+      label: 'Warm'
+    },
+    cold: {
+      icon: Snowflake,
+      bg: 'bg-blue-100',
+      text: 'text-blue-700',
+      border: 'border-blue-200',
+      label: 'Cold'
+    }
+  }
+
+  const config = levelConfig[analysis.level]
+  const Icon = config.icon
+
+  return (
+    <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border ${config.bg} ${config.border}`}>
+      <Icon className={`w-4 h-4 ${config.text}`} />
+      <span className={`text-sm font-medium ${config.text}`}>{config.label}</span>
+    </div>
+  )
+}
+
 export default function InboxPage() {
   const queryClient = useQueryClient()
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null)
   const [messageText, setMessageText] = useState('')
   const [generatingReply, setGeneratingReply] = useState(false)
+  const [conversationAnalysis, setConversationAnalysis] = useState<ConversationAnalysis | null>(null)
+  const [analyzingConversation, setAnalyzingConversation] = useState(false)
+  const [forceRefreshing, setForceRefreshing] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // Fetch chats
-  const { data: chatsData, isLoading: chatsLoading, error: chatsError } = useQuery({
+  // Fetch chats - uses backend cache (30-60 min)
+  // refetchInterval is disabled since backend handles caching
+  const { data: chatsData, isLoading: chatsLoading, error: chatsError, refetch: refetchChats } = useQuery({
     queryKey: ['linkedin-chats'],
-    queryFn: () => getLinkedInChats(50),
-    refetchInterval: 30000, // Refresh every 30 seconds
+    queryFn: () => getLinkedInChats(50, false),
+    staleTime: 60000, // Consider data stale after 1 minute (will refetch on next access)
+    refetchOnWindowFocus: false, // Don't refetch on window focus to save API calls
   })
 
-  // Fetch messages for selected chat
+  // Fetch messages for selected chat - uses backend cache (5-10 min)
   const { data: messagesData, isLoading: messagesLoading } = useQuery({
     queryKey: ['chat-messages', selectedChat?.id],
-    queryFn: () => getChatMessages(selectedChat!.id, 50),
+    queryFn: () => getChatMessages(selectedChat!.id, 50, false),
     enabled: !!selectedChat,
-    refetchInterval: 10000, // Refresh every 10 seconds
+    staleTime: 30000, // Consider stale after 30 seconds
+    refetchOnWindowFocus: false,
   })
+
+  // Reset analysis when chat changes
+  useEffect(() => {
+    setConversationAnalysis(null)
+  }, [selectedChat?.id])
 
   // Fetch leads to match with chats
   const { data: leadsData } = useQuery({
@@ -244,11 +308,16 @@ export default function InboxPage() {
     }
   }
 
-  const chats = chatsData?.data?.items || chatsData?.data || []
-  const messages = messagesData?.data?.items || messagesData?.data || []
+  // Ensure chats is always an array
+  const chatsRaw = chatsData?.data?.items || chatsData?.data || []
+  const chats: Chat[] = Array.isArray(chatsRaw) ? (chatsRaw as Chat[]) : []
+
+  // Ensure messages is always an array
+  const messagesRaw = messagesData?.data?.items || messagesData?.data || []
+  const messages: Message[] = Array.isArray(messagesRaw) ? (messagesRaw as Message[]) : []
 
   // Sort messages by time
-  const sortedMessages = [...messages].sort((a: Message, b: Message) => {
+  const sortedMessages = [...messages].sort((a, b) => {
     const timeA = getMessageTimestamp(a)
     const timeB = getMessageTimestamp(b)
     if (!timeA || !timeB) return 0
@@ -273,6 +342,47 @@ export default function InboxPage() {
     )
   }
 
+  // Cache info from response
+  const cacheInfo = chatsData?.cache_info
+  const isFromCache = chatsData?.from_cache
+
+  // Handle force refresh (bypass cache - use sparingly!)
+  const handleForceRefresh = async () => {
+    if (forceRefreshing) return
+
+    setForceRefreshing(true)
+    try {
+      const freshData = await getLinkedInChats(50, true)
+      queryClient.setQueryData(['linkedin-chats'], freshData)
+    } catch (error) {
+      console.error('Force refresh failed:', error)
+    } finally {
+      setForceRefreshing(false)
+    }
+  }
+
+  // Handle conversation analysis
+  const handleAnalyzeConversation = async () => {
+    if (!selectedChat || sortedMessages.length === 0 || analyzingConversation) return
+
+    setAnalyzingConversation(true)
+    try {
+      let conversationHistory = ''
+      for (const msg of sortedMessages.slice(-10)) { // Last 10 messages
+        const sender = isMessageOutbound(msg) ? 'You' : 'Contact'
+        const text = getMessageText(msg)
+        conversationHistory += `${sender}: ${text}\n`
+      }
+
+      const analysis = await analyzeConversation(conversationHistory.trim())
+      setConversationAnalysis(analysis)
+    } catch (error) {
+      console.error('Analysis failed:', error)
+    } finally {
+      setAnalyzingConversation(false)
+    }
+  }
+
   return (
     <div className="h-[calc(100vh-8rem)]">
       <div className="flex items-center justify-between mb-4">
@@ -280,16 +390,46 @@ export default function InboxPage() {
           <h1 className="text-2xl font-bold text-gray-900">Inbox</h1>
           <p className="text-gray-500">LinkedIn conversations</p>
         </div>
-        <button
-          onClick={() => {
-            queryClient.invalidateQueries({ queryKey: ['linkedin-chats'] })
-            queryClient.invalidateQueries({ queryKey: ['chat-messages'] })
-          }}
-          className="btn btn-secondary flex items-center"
-        >
-          <RefreshCw className="w-4 h-4 mr-2" />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          {/* Cache status indicator */}
+          {cacheInfo && (
+            <div className="flex items-center gap-2 text-sm text-gray-500 bg-gray-50 px-3 py-1.5 rounded-lg">
+              <Shield className="w-4 h-4 text-green-500" />
+              <span>
+                {isFromCache ? (
+                  <>Cached • Refreshes in {formatCacheTime(cacheInfo.expires_in_seconds)}</>
+                ) : (
+                  <>Fresh data</>
+                )}
+              </span>
+            </div>
+          )}
+
+          {/* Normal refresh (uses cache) */}
+          <button
+            onClick={() => refetchChats()}
+            className="btn btn-secondary flex items-center"
+            title="Check for updates (uses cache)"
+          >
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Check
+          </button>
+
+          {/* Force refresh (bypasses cache - use sparingly) */}
+          <button
+            onClick={handleForceRefresh}
+            disabled={forceRefreshing}
+            className="btn btn-secondary flex items-center text-orange-600 border-orange-200 hover:bg-orange-50"
+            title="Force refresh from LinkedIn (use sparingly to avoid ban!)"
+          >
+            {forceRefreshing ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 mr-2" />
+            )}
+            Force Refresh
+          </button>
+        </div>
       </div>
 
       <div className="flex h-[calc(100%-4rem)] bg-white rounded-xl border overflow-hidden">
@@ -314,7 +454,7 @@ export default function InboxPage() {
             </div>
           ) : (
             <div className="flex-1 overflow-y-auto">
-              {chats.map((chat: Chat) => {
+              {chats.map((chat) => {
                 const lead = findLeadForChat(chat)
                 const isSelected = selectedChat?.id === chat.id
 
@@ -408,6 +548,33 @@ export default function InboxPage() {
                     )}
                   </div>
                 </div>
+
+                {/* Conversation Analysis */}
+                <div className="flex items-center gap-3">
+                  {conversationAnalysis && (
+                    <div className="flex flex-col items-end">
+                      <SentimentBadge analysis={conversationAnalysis} />
+                      <p className="text-xs text-gray-500 mt-1 max-w-xs text-right">
+                        {conversationAnalysis.reason}
+                      </p>
+                    </div>
+                  )}
+                  <button
+                    onClick={handleAnalyzeConversation}
+                    disabled={analyzingConversation || sortedMessages.length === 0}
+                    className="btn btn-secondary flex items-center text-sm"
+                    title="Analyze conversation engagement level"
+                  >
+                    {analyzingConversation ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Thermometer className="w-4 h-4 mr-1" />
+                        Analyze
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
 
               {/* Messages */}
@@ -423,7 +590,7 @@ export default function InboxPage() {
                     <p className="text-sm">Start the conversation!</p>
                   </div>
                 ) : (
-                  sortedMessages.map((msg: Message) => {
+                  sortedMessages.map((msg) => {
                     const isOutbound = isMessageOutbound(msg)
                     return (
                       <div
