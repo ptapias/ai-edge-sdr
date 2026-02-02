@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Users, Mail, Flame, Send, Folder, Building2, AlertTriangle, Plus, ArrowRight, Search } from 'lucide-react'
-import { getGlobalStats, getCampaigns, getBusinessProfiles } from '../services/api'
+import {
+  Users, Mail, Flame, Send, Folder, Building2, AlertTriangle, Plus, ArrowRight, Search,
+  TrendingUp, Clock, CheckCircle, Calendar, Zap
+} from 'lucide-react'
+import { getGlobalStats, getCampaigns, getBusinessProfiles, getInvitationStats, getAutomationStatus } from '../services/api'
 
 function StatCard({
   title,
@@ -29,6 +32,30 @@ function StatCard({
   )
 }
 
+// Simple bar chart component
+function MiniBarChart({ data }: { data: Array<{ date: string; count: number; successful: number }> }) {
+  const maxCount = Math.max(...data.map(d => d.count), 1)
+
+  return (
+    <div className="flex items-end gap-1 h-20">
+      {data.slice().reverse().map((day, i) => (
+        <div key={i} className="flex-1 flex flex-col items-center">
+          <div className="w-full flex flex-col-reverse">
+            <div
+              className="w-full bg-blue-500 rounded-t"
+              style={{ height: `${(day.count / maxCount) * 60}px` }}
+              title={`${day.count} sent on ${day.date}`}
+            />
+          </div>
+          <span className="text-[10px] text-gray-400 mt-1">
+            {new Date(day.date).toLocaleDateString('en', { weekday: 'short' }).slice(0, 2)}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function DashboardPage() {
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['stats'],
@@ -43,6 +70,17 @@ export default function DashboardPage() {
   const { data: profiles } = useQuery({
     queryKey: ['business-profiles'],
     queryFn: getBusinessProfiles,
+  })
+
+  const { data: invitationStats } = useQuery({
+    queryKey: ['invitation-stats'],
+    queryFn: getInvitationStats,
+  })
+
+  const { data: automationStatus } = useQuery({
+    queryKey: ['automation-status'],
+    queryFn: getAutomationStatus,
+    refetchInterval: 30000, // Refresh every 30 seconds
   })
 
   const defaultProfile = profiles?.find(p => p.is_default)
@@ -118,6 +156,95 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Automation Status */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Link
+          to="/automation"
+          className={`card border-2 ${
+            automationStatus?.enabled && automationStatus?.can_send
+              ? 'border-green-200 bg-green-50'
+              : automationStatus?.enabled
+                ? 'border-yellow-200 bg-yellow-50'
+                : 'border-gray-200'
+          }`}
+        >
+          <div className="flex items-center gap-4">
+            <div className={`p-3 rounded-lg ${
+              automationStatus?.enabled && automationStatus?.can_send
+                ? 'bg-green-100'
+                : automationStatus?.enabled
+                  ? 'bg-yellow-100'
+                  : 'bg-gray-100'
+            }`}>
+              <Zap className={`w-6 h-6 ${
+                automationStatus?.enabled && automationStatus?.can_send
+                  ? 'text-green-600'
+                  : automationStatus?.enabled
+                    ? 'text-yellow-600'
+                    : 'text-gray-400'
+              }`} />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${
+                  automationStatus?.enabled && automationStatus?.can_send
+                    ? 'bg-green-500 animate-pulse'
+                    : automationStatus?.enabled
+                      ? 'bg-yellow-500'
+                      : 'bg-gray-400'
+                }`} />
+                <h3 className="font-semibold text-gray-900">
+                  {automationStatus?.enabled && automationStatus?.can_send
+                    ? 'Automation Active'
+                    : automationStatus?.enabled
+                      ? 'Automation Paused'
+                      : 'Automation Off'}
+                </h3>
+              </div>
+              <p className="text-sm text-gray-500 mt-1">
+                {automationStatus?.invitations_sent_today ?? 0} / {automationStatus?.daily_limit ?? 40} today
+              </p>
+            </div>
+            <ArrowRight className="w-5 h-5 text-gray-400" />
+          </div>
+        </Link>
+
+        {/* Invitations This Week */}
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm text-gray-500">This Week</p>
+            <Calendar className="w-4 h-4 text-gray-400" />
+          </div>
+          <p className="text-2xl font-semibold">{invitationStats?.this_week ?? 0}</p>
+          <p className="text-xs text-gray-500 mt-1">invitations sent</p>
+          {invitationStats?.by_day && (
+            <div className="mt-3">
+              <MiniBarChart data={invitationStats.by_day} />
+            </div>
+          )}
+        </div>
+
+        {/* Success Rate */}
+        <div className="card">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm text-gray-500">Success Rate</p>
+            <TrendingUp className="w-4 h-4 text-gray-400" />
+          </div>
+          <p className="text-2xl font-semibold text-green-600">{invitationStats?.success_rate ?? 0}%</p>
+          <p className="text-xs text-gray-500 mt-1">invitations accepted</p>
+          <div className="mt-3 flex items-center gap-4 text-sm">
+            <span className="flex items-center text-green-600">
+              <CheckCircle className="w-4 h-4 mr-1" />
+              {Math.round((invitationStats?.total ?? 0) * (invitationStats?.success_rate ?? 0) / 100)}
+            </span>
+            <span className="flex items-center text-gray-400">
+              <Clock className="w-4 h-4 mr-1" />
+              {invitationStats?.total ?? 0} total
+            </span>
+          </div>
+        </div>
+      </div>
 
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
