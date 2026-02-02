@@ -8,6 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from pydantic import BaseModel
 
 from ..database import get_db
 from ..schemas.lead import (
@@ -62,6 +63,21 @@ def list_leads(
     )
 
 
+# NOTE: This route MUST come BEFORE /{lead_id} to avoid "statuses" being interpreted as a lead_id
+@router.get("/statuses", response_model=List[LeadStatusInfo])
+def get_available_statuses():
+    """Get all available CRM statuses with their configuration."""
+    statuses = []
+    for status, config in LEAD_STATUS_CONFIG.items():
+        statuses.append(LeadStatusInfo(
+            value=status.value,
+            label=config["label"],
+            color=config["color"],
+            order=config["order"]
+        ))
+    return sorted(statuses, key=lambda x: x.order)
+
+
 @router.get("/{lead_id}", response_model=LeadResponse)
 def get_lead(lead_id: str, db: Session = Depends(get_db)):
     """Get a single lead by ID."""
@@ -97,20 +113,6 @@ def delete_lead(lead_id: str, db: Session = Depends(get_db)):
     db.delete(lead)
     db.commit()
     return {"message": "Lead deleted"}
-
-
-@router.get("/statuses", response_model=List[LeadStatusInfo])
-def get_available_statuses():
-    """Get all available CRM statuses with their configuration."""
-    statuses = []
-    for status, config in LEAD_STATUS_CONFIG.items():
-        statuses.append(LeadStatusInfo(
-            value=status.value,
-            label=config["label"],
-            color=config["color"],
-            order=config["order"]
-        ))
-    return sorted(statuses, key=lambda x: x.order)
 
 
 @router.patch("/{lead_id}/status", response_model=LeadResponse)
@@ -158,10 +160,15 @@ def bulk_update_status(
     return {"updated": updated, "status": bulk_update.status.value}
 
 
+class NotesUpdate(BaseModel):
+    """Request body for updating lead notes."""
+    notes: str
+
+
 @router.patch("/{lead_id}/notes", response_model=LeadResponse)
 def update_lead_notes(
     lead_id: str,
-    notes: str,
+    notes_update: NotesUpdate,
     db: Session = Depends(get_db)
 ):
     """Update a lead's notes."""
@@ -169,7 +176,7 @@ def update_lead_notes(
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
-    lead.notes = notes
+    lead.notes = notes_update.notes
     lead.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(lead)

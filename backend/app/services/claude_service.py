@@ -339,3 +339,75 @@ Sender:
                 "subject": "Quick question",
                 "body": response_text[:500]
             }
+
+    def generate_conversation_reply(
+        self,
+        conversation_history: str,
+        contact_info: Dict[str, Any],
+        sender_context: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Generate a contextual reply for an ongoing LinkedIn conversation.
+
+        Args:
+            conversation_history: Formatted conversation history
+            contact_info: Information about the contact (name, job_title, company)
+            sender_context: Sender's business context
+
+        Returns:
+            Reply message
+        """
+        context = sender_context or {}
+
+        system_prompt = """You are Pablo's AI assistant for LinkedIn conversations. You help continue conversations naturally.
+
+CONTEXT:
+- You're helping Pablo (the sender) respond to LinkedIn messages
+- Goal: Build genuine professional relationships, explore potential collaboration
+- Tone: Direct, curious, professional but not corporate
+
+RULES:
+- Keep replies SHORT (2-4 sentences max)
+- Reference what they said specifically
+- Ask thoughtful follow-up questions when appropriate
+- Show genuine interest in their work
+- NO flattery or fake enthusiasm
+- NO sales pitch unless they're clearly interested
+- Avoid clichés like "excited to" or "love that"
+
+If they asked a question, answer it directly.
+If they shared something, acknowledge it genuinely and dig deeper if interesting.
+If the conversation is stalling, ask a specific question about their work.
+
+Output ONLY the reply message, nothing else."""
+
+        user_content = f"""Generate a reply for this conversation:
+
+CONVERSATION HISTORY:
+{conversation_history}
+
+CONTACT INFO:
+- Name: {contact_info.get('name', 'Contact')}
+- Job Title: {contact_info.get('job_title', 'Unknown')}
+- Company: {contact_info.get('company', 'Unknown')}
+
+SENDER (Pablo) CONTEXT:
+- Role: {context.get('sender_role', 'Founder')}
+- Company: {context.get('sender_company', '')}
+- Context: {context.get('sender_context', '')}
+
+Write the reply:"""
+
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=300,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}]
+        )
+
+        result = message.content[0].text.strip()
+
+        # Clean up any markdown formatting
+        result = result.replace("```", "").replace("`", "").strip()
+
+        return result

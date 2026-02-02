@@ -193,7 +193,7 @@ export const bulkUpdateLeadStatus = async (leadIds: string[], status: LeadStatus
 }
 
 export const updateLeadNotes = async (leadId: string, notes: string): Promise<Lead> => {
-  const response = await api.patch(`/leads/${leadId}/notes`, null, { params: { notes } })
+  const response = await api.patch(`/leads/${leadId}/notes`, { notes })
   return response.data
 }
 
@@ -251,6 +251,18 @@ export const getChatMessages = async (chatId: string, limit = 50) => {
 
 export const sendChatMessage = async (chatId: string, text: string) => {
   const response = await api.post(`/linkedin/chats/${chatId}/send`, null, { params: { text } })
+  return response.data
+}
+
+export interface GenerateReplyRequest {
+  conversation_history: string
+  contact_name: string
+  contact_job_title?: string
+  contact_company?: string
+}
+
+export const generateConversationReply = async (request: GenerateReplyRequest) => {
+  const response = await api.post('/linkedin/generate-reply', request)
   return response.data
 }
 

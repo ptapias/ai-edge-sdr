@@ -13,6 +13,8 @@ from ..database import get_db
 from ..models import Lead
 from ..models.lead import LeadStatus
 from ..services.unipile_service import UnipileService
+from ..services.claude_service import ClaudeService
+from ..models import BusinessProfile
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/linkedin", tags=["linkedin"])
@@ -250,3 +252,56 @@ async def get_linkedin_user(provider_id: str):
     unipile = UnipileService()
     result = await unipile.get_user_info(provider_id)
     return result
+
+
+class GenerateReplyRequest(BaseModel):
+    """Request to generate a contextual reply."""
+    conversation_history: str  # Formatted conversation history
+    contact_name: str
+    contact_job_title: Optional[str] = None
+    contact_company: Optional[str] = None
+
+
+@router.post("/generate-reply")
+def generate_conversation_reply(
+    request: GenerateReplyRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Generate a contextual AI reply for an ongoing conversation.
+
+    Args:
+        request: Conversation context and contact info
+
+    Returns:
+        Generated reply message
+    """
+    # Get default business profile for sender context
+    profile = db.query(BusinessProfile).filter(BusinessProfile.is_default == True).first()
+
+    sender_context = None
+    if profile:
+        sender_context = {
+            "sender_name": profile.sender_name,
+            "sender_role": profile.sender_role,
+            "sender_company": profile.sender_company,
+            "sender_context": profile.sender_context,
+        }
+
+    contact_info = {
+        "name": request.contact_name,
+        "job_title": request.contact_job_title or "Unknown",
+        "company": request.contact_company or "Unknown"
+    }
+
+    claude = ClaudeService()
+    reply = claude.generate_conversation_reply(
+        conversation_history=request.conversation_history,
+        contact_info=contact_info,
+        sender_context=sender_context
+    )
+
+    return {
+        "reply": reply,
+        "length": len(reply)
+    }

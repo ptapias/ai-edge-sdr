@@ -32,6 +32,7 @@ import {
   generateLinkedInMessage,
   getLeadStatuses,
   updateLeadStatus,
+  updateLeadNotes,
   sendLinkedInInvitation,
   checkLinkedInConnection,
   type Lead,
@@ -759,9 +760,13 @@ export default function LeadsPage() {
                                 <div className="flex gap-2">
                                   <button
                                     onClick={async () => {
-                                      await updateLeadStatus(lead.id, lead.status as LeadStatusValue, notesText ? `Note: ${notesText}` : undefined)
-                                      queryClient.invalidateQueries({ queryKey: ['leads'] })
-                                      setEditingNotes(null)
+                                      try {
+                                        await updateLeadNotes(lead.id, notesText)
+                                        queryClient.invalidateQueries({ queryKey: ['leads'] })
+                                        setEditingNotes(null)
+                                      } catch (err) {
+                                        console.error('Failed to save notes:', err)
+                                      }
                                     }}
                                     className="btn btn-primary btn-sm flex items-center text-xs"
                                   >

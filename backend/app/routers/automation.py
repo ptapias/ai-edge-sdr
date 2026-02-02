@@ -54,6 +54,11 @@ def update_automation_settings(
     settings = get_or_create_settings(db)
 
     update_data = update.model_dump(exclude_unset=True)
+
+    # Enforce maximum daily limit of 40 connections (LinkedIn limit)
+    if "daily_limit" in update_data:
+        update_data["daily_limit"] = min(update_data["daily_limit"], 40)
+
     for key, value in update_data.items():
         setattr(settings, key, value)
 

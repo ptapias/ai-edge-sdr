@@ -267,7 +267,7 @@ export default function AutomationPage() {
           color="bg-green-500"
         />
         <StatCard
-          title="Success Rate"
+          title="Acceptance Rate"
           value={`${stats?.success_rate ?? 0}%`}
           icon={CheckCircle}
           color="bg-emerald-500"
@@ -364,20 +364,20 @@ export default function AutomationPage() {
               </div>
             </div>
 
-            {/* Daily Limit */}
+            {/* Daily Connection Limit */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Daily Limit
+                Daily Connection Limit
               </label>
               <input
                 type="number"
                 min="1"
-                max="100"
-                value={localSettings.daily_limit ?? settings?.daily_limit ?? 40}
-                onChange={(e) => updateLocalSetting('daily_limit', parseInt(e.target.value))}
+                max="40"
+                value={Math.min(localSettings.daily_limit ?? settings?.daily_limit ?? 40, 40)}
+                onChange={(e) => updateLocalSetting('daily_limit', Math.min(parseInt(e.target.value) || 1, 40))}
                 className="input w-24"
               />
-              <p className="text-xs text-gray-500 mt-1">Maximum invitations per day (recommended: 30-40)</p>
+              <p className="text-xs text-gray-500 mt-1">Maximum connection invitations per day (max: 40)</p>
             </div>
 
             {/* Delay Settings */}

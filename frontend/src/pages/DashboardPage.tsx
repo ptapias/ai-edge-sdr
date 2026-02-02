@@ -225,10 +225,10 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Success Rate */}
+        {/* Acceptance Rate */}
         <div className="card">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-sm text-gray-500">Success Rate</p>
+            <p className="text-sm text-gray-500">Acceptance Rate</p>
             <TrendingUp className="w-4 h-4 text-gray-400" />
           </div>
           <p className="text-2xl font-semibold text-green-600">{invitationStats?.success_rate ?? 0}%</p>
