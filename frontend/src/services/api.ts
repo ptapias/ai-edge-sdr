@@ -23,16 +23,41 @@ export interface Lead {
   company_industry: string | null
   country: string | null
   linkedin_url: string | null
+  linkedin_provider_id: string | null
+  linkedin_chat_id: string | null
   score: number | null
   score_label: string | null
   score_reason: string | null
   status: string
   linkedin_message: string | null
   email_message: string | null
+  notes: string | null
   campaign_id: string | null
+  connection_sent_at: string | null
+  connected_at: string | null
+  last_message_at: string | null
   created_at: string
   updated_at: string
 }
+
+export interface LeadStatus {
+  value: string
+  label: string
+  color: string
+  order: number
+}
+
+export type LeadStatusValue =
+  | 'new'
+  | 'pending'
+  | 'invitation_sent'
+  | 'connected'
+  | 'in_conversation'
+  | 'meeting_scheduled'
+  | 'qualified'
+  | 'disqualified'
+  | 'closed_won'
+  | 'closed_lost'
 
 export interface Campaign {
   id: string
@@ -149,6 +174,26 @@ export const generateEmailMessage = async (leadId: string, businessId?: string) 
 
 export const sendLinkedInConnection = async (leadId: string) => {
   const response = await api.post(`/leads/${leadId}/action/linkedin`)
+  return response.data
+}
+
+export const getLeadStatuses = async (): Promise<LeadStatus[]> => {
+  const response = await api.get('/leads/statuses')
+  return response.data
+}
+
+export const updateLeadStatus = async (leadId: string, status: LeadStatusValue, notes?: string): Promise<Lead> => {
+  const response = await api.patch(`/leads/${leadId}/status`, { status, notes })
+  return response.data
+}
+
+export const bulkUpdateLeadStatus = async (leadIds: string[], status: LeadStatusValue) => {
+  const response = await api.post('/leads/status/bulk', { lead_ids: leadIds, status })
+  return response.data
+}
+
+export const updateLeadNotes = async (leadId: string, notes: string): Promise<Lead> => {
+  const response = await api.patch(`/leads/${leadId}/notes`, null, { params: { notes } })
   return response.data
 }
 

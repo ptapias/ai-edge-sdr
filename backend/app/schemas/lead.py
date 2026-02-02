@@ -2,8 +2,23 @@
 Lead schemas for API validation.
 """
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
+from enum import Enum
 from pydantic import BaseModel, EmailStr, Field
+
+
+class LeadStatusEnum(str, Enum):
+    """CRM status for leads."""
+    NEW = "new"
+    PENDING = "pending"
+    INVITATION_SENT = "invitation_sent"
+    CONNECTED = "connected"
+    IN_CONVERSATION = "in_conversation"
+    MEETING_SCHEDULED = "meeting_scheduled"
+    QUALIFIED = "qualified"
+    DISQUALIFIED = "disqualified"
+    CLOSED_WON = "closed_won"
+    CLOSED_LOST = "closed_lost"
 
 
 class LeadBase(BaseModel):
@@ -44,6 +59,27 @@ class LeadUpdate(BaseModel):
     email_message: Optional[str] = None
     email_verified: Optional[bool] = None
     email_status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class LeadStatusUpdate(BaseModel):
+    """Schema for updating lead status."""
+    status: LeadStatusEnum
+    notes: Optional[str] = None
+
+
+class LeadStatusInfo(BaseModel):
+    """Schema for status information."""
+    value: str
+    label: str
+    color: str
+    order: int
+
+
+class LeadBulkStatusUpdate(BaseModel):
+    """Schema for bulk status update."""
+    lead_ids: List[str]
+    status: LeadStatusEnum
 
 
 class LeadScoring(BaseModel):
@@ -64,7 +100,13 @@ class LeadResponse(LeadBase):
     status: str = "new"
     linkedin_message: Optional[str] = None
     email_message: Optional[str] = None
+    notes: Optional[str] = None
     campaign_id: Optional[str] = None
+    linkedin_provider_id: Optional[str] = None
+    linkedin_chat_id: Optional[str] = None
+    connection_sent_at: Optional[datetime] = None
+    connected_at: Optional[datetime] = None
+    last_message_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

@@ -3,10 +3,40 @@ Lead model - represents a potential contact/lead.
 """
 import uuid
 from datetime import datetime
+from enum import Enum
 from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.orm import relationship
 
 from ..database import Base
+
+
+class LeadStatus(str, Enum):
+    """CRM status for leads."""
+    NEW = "new"                          # Nuevo, sin contactar
+    PENDING = "pending"                  # Pendiente de invitación
+    INVITATION_SENT = "invitation_sent"  # Invitación enviada
+    CONNECTED = "connected"              # Conectado en LinkedIn
+    IN_CONVERSATION = "in_conversation"  # En conversación
+    MEETING_SCHEDULED = "meeting_scheduled"  # Reunión agendada
+    QUALIFIED = "qualified"              # Lead calificado
+    DISQUALIFIED = "disqualified"        # Descartado
+    CLOSED_WON = "closed_won"            # Cerrado ganado
+    CLOSED_LOST = "closed_lost"          # Cerrado perdido
+
+
+# CRM Status configuration with colors and labels
+LEAD_STATUS_CONFIG = {
+    LeadStatus.NEW: {"label": "New", "color": "gray", "order": 1},
+    LeadStatus.PENDING: {"label": "Pending", "color": "yellow", "order": 2},
+    LeadStatus.INVITATION_SENT: {"label": "Invitation Sent", "color": "blue", "order": 3},
+    LeadStatus.CONNECTED: {"label": "Connected", "color": "green", "order": 4},
+    LeadStatus.IN_CONVERSATION: {"label": "In Conversation", "color": "purple", "order": 5},
+    LeadStatus.MEETING_SCHEDULED: {"label": "Meeting Scheduled", "color": "orange", "order": 6},
+    LeadStatus.QUALIFIED: {"label": "Qualified", "color": "emerald", "order": 7},
+    LeadStatus.DISQUALIFIED: {"label": "Disqualified", "color": "red", "order": 8},
+    LeadStatus.CLOSED_WON: {"label": "Closed Won", "color": "green", "order": 9},
+    LeadStatus.CLOSED_LOST: {"label": "Closed Lost", "color": "gray", "order": 10},
+}
 
 
 class Lead(Base):
@@ -54,6 +84,7 @@ class Lead(Base):
 
     # LinkedIn
     linkedin_url = Column(String(500), nullable=True)
+    linkedin_provider_id = Column(String(100), nullable=True)  # Unipile provider ID
     sales_navigator_id = Column(String(100), nullable=True)
 
     # Lead scoring (AI)
@@ -61,15 +92,17 @@ class Lead(Base):
     score_label = Column(String(20), nullable=True)  # hot/warm/cold
     score_reason = Column(Text, nullable=True)  # AI explanation
 
-    # Outreach status
-    status = Column(String(50), default="new")  # new/contacted/connected/replied
+    # CRM Status
+    status = Column(String(50), default=LeadStatus.NEW.value)
     linkedin_message = Column(Text, nullable=True)
     email_message = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)  # Manual notes
 
-    # Tracking
+    # LinkedIn tracking
     connection_sent_at = Column(DateTime, nullable=True)
     connected_at = Column(DateTime, nullable=True)
     last_message_at = Column(DateTime, nullable=True)
+    linkedin_chat_id = Column(String(100), nullable=True)  # Unipile chat ID
 
     # Campaign relationship
     campaign_id = Column(String(36), ForeignKey("campaigns.id"), nullable=True)

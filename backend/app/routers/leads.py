@@ -10,8 +10,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from ..database import get_db
-from ..schemas.lead import LeadResponse, LeadUpdate, LeadScoring, LeadListResponse
+from ..schemas.lead import (
+    LeadResponse, LeadUpdate, LeadScoring, LeadListResponse,
+    LeadStatusUpdate, LeadStatusInfo, LeadBulkStatusUpdate, LeadStatusEnum
+)
 from ..models import Lead, BusinessProfile
+from ..models.lead import LeadStatus, LEAD_STATUS_CONFIG
 from ..services.claude_service import ClaudeService
 from ..services.verifier_service import VerifierService
 from ..services.n8n_service import N8NService
@@ -92,6 +96,83 @@ def delete_lead(lead_id: str, db: Session = Depends(get_db)):
     db.delete(lead)
     db.commit()
     return {"message": "Lead deleted"}
+
+
+@router.get("/statuses", response_model=List[LeadStatusInfo])
+def get_available_statuses():
+    """Get all available CRM statuses with their configuration."""
+    statuses = []
+    for status, config in LEAD_STATUS_CONFIG.items():
+        statuses.append(LeadStatusInfo(
+            value=status.value,
+            label=config["label"],
+            color=config["color"],
+            order=config["order"]
+        ))
+    return sorted(statuses, key=lambda x: x.order)
+
+
+@router.patch("/{lead_id}/status", response_model=LeadResponse)
+def update_lead_status(
+    lead_id: str,
+    status_update: LeadStatusUpdate,
+    db: Session = Depends(get_db)
+):
+    """Update a lead's CRM status."""
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    lead.status = status_update.status.value
+    if status_update.notes:
+        # Append to existing notes with timestamp
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        new_note = f"[{timestamp}] Status changed to {status_update.status.value}: {status_update.notes}"
+        if lead.notes:
+            lead.notes = f"{lead.notes}\n{new_note}"
+        else:
+            lead.notes = new_note
+
+    lead.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(lead)
+    return lead
+
+
+@router.post("/status/bulk")
+def bulk_update_status(
+    bulk_update: LeadBulkStatusUpdate,
+    db: Session = Depends(get_db)
+):
+    """Update status for multiple leads at once."""
+    updated = 0
+    for lead_id in bulk_update.lead_ids:
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        if lead:
+            lead.status = bulk_update.status.value
+            lead.updated_at = datetime.utcnow()
+            updated += 1
+
+    db.commit()
+    return {"updated": updated, "status": bulk_update.status.value}
+
+
+@router.patch("/{lead_id}/notes", response_model=LeadResponse)
+def update_lead_notes(
+    lead_id: str,
+    notes: str,
+    db: Session = Depends(get_db)
+):
+    """Update a lead's notes."""
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    lead.notes = notes
+    lead.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(lead)
+    return lead
 
 
 @router.post("/verify")

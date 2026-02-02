@@ -19,6 +19,9 @@ import {
   X,
   Copy,
   Check,
+  StickyNote,
+  Edit3,
+  Save,
 } from 'lucide-react'
 import {
   getLeads,
@@ -28,7 +31,11 @@ import {
   qualifyLeads,
   generateLinkedInMessage,
   sendLinkedInConnection,
+  getLeadStatuses,
+  updateLeadStatus,
   type Lead,
+  type LeadStatus,
+  type LeadStatusValue,
 } from '../services/api'
 
 function ScoreBadge({ label, score }: { label: string | null; score: number | null }) {
@@ -79,6 +86,75 @@ function EmailStatus({ email, verified, status }: { email: string | null; verifi
           <span className="text-gray-400">Not verified</span>
         )}
       </p>
+    </div>
+  )
+}
+
+// CRM Status colors mapping
+const STATUS_COLORS: Record<string, string> = {
+  new: 'bg-gray-100 text-gray-700',
+  pending: 'bg-yellow-100 text-yellow-700',
+  invitation_sent: 'bg-blue-100 text-blue-700',
+  connected: 'bg-green-100 text-green-700',
+  in_conversation: 'bg-purple-100 text-purple-700',
+  meeting_scheduled: 'bg-orange-100 text-orange-700',
+  qualified: 'bg-emerald-100 text-emerald-700',
+  disqualified: 'bg-red-100 text-red-700',
+  closed_won: 'bg-green-200 text-green-800',
+  closed_lost: 'bg-gray-200 text-gray-600',
+}
+
+function StatusBadge({
+  status,
+  statuses,
+  onStatusChange,
+  isUpdating
+}: {
+  status: string
+  statuses: LeadStatus[]
+  onStatusChange: (newStatus: LeadStatusValue) => void
+  isUpdating: boolean
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const currentStatus = statuses.find(s => s.value === status)
+  const colorClass = STATUS_COLORS[status] || 'bg-gray-100 text-gray-700'
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        disabled={isUpdating}
+        className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${colorClass} hover:opacity-80 transition-opacity`}
+      >
+        {isUpdating ? (
+          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+        ) : null}
+        {currentStatus?.label || status}
+        <ChevronDown className="w-3 h-3 ml-1" />
+      </button>
+
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
+          <div className="absolute z-20 mt-1 w-48 bg-white rounded-lg shadow-lg border py-1 max-h-64 overflow-y-auto">
+            {statuses.map((s) => (
+              <button
+                key={s.value}
+                onClick={() => {
+                  onStatusChange(s.value as LeadStatusValue)
+                  setIsOpen(false)
+                }}
+                className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 ${
+                  s.value === status ? 'bg-gray-50 font-medium' : ''
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${STATUS_COLORS[s.value]?.split(' ')[0] || 'bg-gray-200'}`} />
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -164,6 +240,9 @@ export default function LeadsPage() {
   const [expandedLead, setExpandedLead] = useState<string | null>(null)
   const [messageModal, setMessageModal] = useState<{ lead: Lead; message: string } | null>(null)
   const [generatingFor, setGeneratingFor] = useState<string | null>(null)
+  const [updatingStatusFor, setUpdatingStatusFor] = useState<string | null>(null)
+  const [editingNotes, setEditingNotes] = useState<string | null>(null)
+  const [notesText, setNotesText] = useState('')
   const queryClient = useQueryClient()
 
   const campaignId = searchParams.get('campaign_id')
@@ -189,6 +268,11 @@ export default function LeadsPage() {
   const { data: profiles } = useQuery({
     queryKey: ['business-profiles'],
     queryFn: getBusinessProfiles,
+  })
+
+  const { data: availableStatuses } = useQuery({
+    queryKey: ['lead-statuses'],
+    queryFn: getLeadStatuses,
   })
 
   const defaultProfile = profiles?.find(p => p.is_default)
@@ -229,6 +313,21 @@ export default function LeadsPage() {
       setMessageModal(null)
     },
   })
+
+  const statusMutation = useMutation({
+    mutationFn: ({ leadId, status }: { leadId: string; status: LeadStatusValue }) =>
+      updateLeadStatus(leadId, status),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] })
+      setUpdatingStatusFor(null)
+    },
+    onError: () => setUpdatingStatusFor(null)
+  })
+
+  const handleStatusChange = (leadId: string, newStatus: LeadStatusValue) => {
+    setUpdatingStatusFor(leadId)
+    statusMutation.mutate({ leadId, status: newStatus })
+  }
 
   // Auto-verify and auto-score leads that haven't been processed
   useEffect(() => {
@@ -384,7 +483,7 @@ export default function LeadsPage() {
         </select>
 
         <select
-          className="input w-36"
+          className="input w-44"
           value={status || ''}
           onChange={(e) => {
             const params = new URLSearchParams(searchParams)
@@ -398,10 +497,11 @@ export default function LeadsPage() {
           }}
         >
           <option value="">All Status</option>
-          <option value="new">New</option>
-          <option value="contacted">Contacted</option>
-          <option value="connected">Connected</option>
-          <option value="replied">Replied</option>
+          {availableStatuses?.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
         </select>
 
         <div className="flex gap-2 ml-auto">
@@ -530,15 +630,12 @@ export default function LeadsPage() {
                       <ScoreBadge label={lead.score_label} score={lead.score} />
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`capitalize text-sm px-2 py-1 rounded-full ${
-                        lead.status === 'new' ? 'bg-gray-100 text-gray-600' :
-                        lead.status === 'contacted' ? 'bg-blue-100 text-blue-700' :
-                        lead.status === 'connected' ? 'bg-green-100 text-green-700' :
-                        lead.status === 'replied' ? 'bg-purple-100 text-purple-700' :
-                        'bg-gray-100 text-gray-600'
-                      }`}>
-                        {lead.status}
-                      </span>
+                      <StatusBadge
+                        status={lead.status}
+                        statuses={availableStatuses || []}
+                        onStatusChange={(newStatus) => handleStatusChange(lead.id, newStatus)}
+                        isUpdating={updatingStatusFor === lead.id}
+                      />
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1">
@@ -576,9 +673,9 @@ export default function LeadsPage() {
                   {expandedLead === lead.id && (
                     <tr className="bg-gray-50">
                       <td colSpan={7} className="px-4 py-4">
-                        <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div className="grid grid-cols-3 gap-4 text-sm">
                           <div>
-                            <p className="text-gray-500 font-medium mb-1">Contact Info</p>
+                            <p className="text-gray-500 font-medium mb-2">Contact Info</p>
                             <p><span className="text-gray-500">Email:</span> {lead.email || 'N/A'}</p>
                             <p><span className="text-gray-500">Country:</span> {lead.country || 'N/A'}</p>
                             <p><span className="text-gray-500">LinkedIn:</span> {lead.linkedin_url ? (
@@ -588,16 +685,91 @@ export default function LeadsPage() {
                             ) : 'N/A'}</p>
                           </div>
                           <div>
-                            <p className="text-gray-500 font-medium mb-1">AI Scoring</p>
+                            <p className="text-gray-500 font-medium mb-2">AI Scoring</p>
                             {lead.score_reason ? (
                               <p className="text-gray-700">{lead.score_reason}</p>
                             ) : (
                               <p className="text-gray-400 italic">Not scored yet. Select and click "Score" to analyze.</p>
                             )}
                           </div>
+                          <div>
+                            <p className="text-gray-500 font-medium mb-2">Timeline</p>
+                            <div className="space-y-1 text-xs">
+                              <p><span className="text-gray-500">Created:</span> {new Date(lead.created_at).toLocaleDateString()}</p>
+                              {lead.connection_sent_at && (
+                                <p><span className="text-gray-500">Invitation Sent:</span> {new Date(lead.connection_sent_at).toLocaleDateString()}</p>
+                              )}
+                              {lead.connected_at && (
+                                <p><span className="text-gray-500">Connected:</span> {new Date(lead.connected_at).toLocaleDateString()}</p>
+                              )}
+                              {lead.last_message_at && (
+                                <p><span className="text-gray-500">Last Message:</span> {new Date(lead.last_message_at).toLocaleDateString()}</p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Notes section */}
+                          <div className="col-span-3 border-t pt-3 mt-2">
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-gray-500 font-medium flex items-center">
+                                <StickyNote className="w-4 h-4 mr-1" />
+                                Notes
+                              </p>
+                              {editingNotes !== lead.id && (
+                                <button
+                                  onClick={() => {
+                                    setEditingNotes(lead.id)
+                                    setNotesText(lead.notes || '')
+                                  }}
+                                  className="text-blue-600 hover:text-blue-800 text-xs flex items-center"
+                                >
+                                  <Edit3 className="w-3 h-3 mr-1" />
+                                  Edit
+                                </button>
+                              )}
+                            </div>
+                            {editingNotes === lead.id ? (
+                              <div className="space-y-2">
+                                <textarea
+                                  value={notesText}
+                                  onChange={(e) => setNotesText(e.target.value)}
+                                  className="w-full border rounded p-2 text-sm min-h-[80px]"
+                                  placeholder="Add notes about this lead..."
+                                />
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={async () => {
+                                      await updateLeadStatus(lead.id, lead.status as LeadStatusValue, notesText ? `Note: ${notesText}` : undefined)
+                                      queryClient.invalidateQueries({ queryKey: ['leads'] })
+                                      setEditingNotes(null)
+                                    }}
+                                    className="btn btn-primary btn-sm flex items-center text-xs"
+                                  >
+                                    <Save className="w-3 h-3 mr-1" />
+                                    Save
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingNotes(null)}
+                                    className="btn btn-secondary btn-sm text-xs"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="bg-white rounded border p-2 min-h-[40px]">
+                                {lead.notes ? (
+                                  <p className="text-gray-700 whitespace-pre-wrap text-xs">{lead.notes}</p>
+                                ) : (
+                                  <p className="text-gray-400 italic text-xs">No notes yet. Click Edit to add.</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
                           {lead.linkedin_message && (
-                            <div className="col-span-2">
-                              <p className="text-gray-500 font-medium mb-1">Generated LinkedIn Message</p>
+                            <div className="col-span-3 border-t pt-3">
+                              <p className="text-gray-500 font-medium mb-2">Generated LinkedIn Message</p>
                               <div className="bg-white rounded border p-3">
                                 <p className="text-gray-700">{lead.linkedin_message}</p>
                               </div>
