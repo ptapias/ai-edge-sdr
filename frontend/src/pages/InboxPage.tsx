@@ -40,6 +40,11 @@ interface Chat {
   // Alternative field names for the contact name
   name?: string
   display_name?: string
+  // Enriched attendee info from backend
+  attendee_name?: string
+  attendee_job_title?: string
+  attendee_profile_url?: string
+  attendee_profile_picture?: string
   // Time fields - Unipile can use different field names
   last_activity_at?: string
   last_message_at?: string
@@ -105,11 +110,14 @@ function formatValidDate(date: Date) {
 
 // Helper to extract chat name from Unipile response
 function getChatName(chat: Chat): string {
-  // Try direct name fields first
+  // First priority: enriched attendee name from backend
+  if (chat.attendee_name) return chat.attendee_name
+
+  // Try direct name fields
   if (chat.name) return chat.name
   if (chat.display_name) return chat.display_name
 
-  // Try to get from attendees
+  // Try to get from attendees array
   if (chat.attendees && chat.attendees.length > 0) {
     const attendee = chat.attendees[0]
     if (attendee.display_name) return attendee.display_name
@@ -122,6 +130,16 @@ function getChatName(chat: Chat): string {
   }
 
   return 'Unknown'
+}
+
+// Helper to get attendee job title
+function getChatJobTitle(chat: Chat): string | undefined {
+  return chat.attendee_job_title
+}
+
+// Helper to get attendee profile picture
+function getChatProfilePicture(chat: Chat): string | undefined {
+  return chat.attendee_profile_picture
 }
 
 // Helper to get chat timestamp
@@ -309,9 +327,17 @@ export default function InboxPage() {
                     }`}
                   >
                     <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
-                        <User className="w-5 h-5 text-gray-500" />
-                      </div>
+                      {getChatProfilePicture(chat) ? (
+                        <img
+                          src={getChatProfilePicture(chat)}
+                          alt={getChatName(chat)}
+                          className="w-10 h-10 rounded-full object-cover flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+                          <User className="w-5 h-5 text-gray-500" />
+                        </div>
+                      )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between">
                           <p className="font-medium text-gray-900 truncate">
@@ -323,8 +349,14 @@ export default function InboxPage() {
                             </span>
                           ) : null}
                         </div>
-                        {lead && (
-                          <p className="text-xs text-gray-500 truncate flex items-center mt-0.5">
+                        {/* Show job title from enriched data or lead */}
+                        {(getChatJobTitle(chat) || lead?.job_title) && (
+                          <p className="text-xs text-gray-500 truncate mt-0.5">
+                            {getChatJobTitle(chat) || lead?.job_title}
+                          </p>
+                        )}
+                        {lead?.company_name && (
+                          <p className="text-xs text-gray-400 truncate flex items-center mt-0.5">
                             <Building2 className="w-3 h-3 mr-1" />
                             {lead.company_name}
                           </p>
@@ -352,16 +384,26 @@ export default function InboxPage() {
               {/* Chat Header */}
               <div className="p-4 border-b flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
-                    <User className="w-5 h-5 text-gray-500" />
-                  </div>
+                  {getChatProfilePicture(selectedChat) ? (
+                    <img
+                      src={getChatProfilePicture(selectedChat)}
+                      alt={getChatName(selectedChat)}
+                      className="w-10 h-10 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
+                      <User className="w-5 h-5 text-gray-500" />
+                    </div>
+                  )}
                   <div>
                     <p className="font-semibold text-gray-900">
                       {getChatName(selectedChat) || findLeadForChat(selectedChat)?.first_name || 'Unknown'}
                     </p>
-                    {findLeadForChat(selectedChat) && (
+                    {/* Show job title from enriched data or lead */}
+                    {(getChatJobTitle(selectedChat) || findLeadForChat(selectedChat)?.job_title) && (
                       <p className="text-sm text-gray-500">
-                        {findLeadForChat(selectedChat)?.job_title} at {findLeadForChat(selectedChat)?.company_name}
+                        {getChatJobTitle(selectedChat) || findLeadForChat(selectedChat)?.job_title}
+                        {findLeadForChat(selectedChat)?.company_name && ` at ${findLeadForChat(selectedChat)?.company_name}`}
                       </p>
                     )}
                   </div>

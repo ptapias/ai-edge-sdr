@@ -171,19 +171,76 @@ async def send_bulk_invitations(
 
 @router.get("/chats")
 async def get_linkedin_chats(
-    limit: int = Query(50, ge=1, le=100)
+    limit: int = Query(50, ge=1, le=100),
+    enrich: bool = Query(True, description="Enrich chats with attendee profile info")
 ):
     """
-    Get LinkedIn chats from Unipile.
+    Get LinkedIn chats from Unipile, optionally enriched with attendee profile info.
 
     Args:
         limit: Maximum number of chats to return
+        enrich: Whether to fetch attendee profile details (name, job title)
 
     Returns:
-        List of chats
+        List of chats with enriched attendee information
     """
     unipile = UnipileService()
     result = await unipile.get_chats(limit=limit)
+
+    if not result.get("success") or not enrich:
+        return result
+
+    # Enrich chats with attendee profile information
+    chats = result.get("data", {})
+    items = chats.get("items", []) if isinstance(chats, dict) else chats
+
+    enriched_items = []
+    for chat in items:
+        enriched_chat = dict(chat)
+
+        # Try to get attendee provider_id from various possible locations
+        attendee_provider_id = None
+
+        # Check attendees array
+        attendees = chat.get("attendees", [])
+        if attendees and len(attendees) > 0:
+            attendee = attendees[0]
+            attendee_provider_id = attendee.get("provider_id") or attendee.get("identifier")
+
+        # If no attendees, try other fields
+        if not attendee_provider_id:
+            attendee_provider_id = chat.get("attendee_provider_id") or chat.get("provider_id")
+
+        # Fetch profile info if we have a provider_id
+        if attendee_provider_id:
+            try:
+                profile_result = await unipile.get_user_info(attendee_provider_id)
+                if profile_result.get("success"):
+                    profile_data = profile_result.get("data", {})
+                    # Add enriched info to chat
+                    enriched_chat["attendee_name"] = (
+                        profile_data.get("full_name") or
+                        f"{profile_data.get('first_name', '')} {profile_data.get('last_name', '')}".strip() or
+                        profile_data.get("name")
+                    )
+                    enriched_chat["attendee_job_title"] = (
+                        profile_data.get("headline") or
+                        profile_data.get("occupation") or
+                        profile_data.get("job_title")
+                    )
+                    enriched_chat["attendee_profile_url"] = profile_data.get("profile_url") or profile_data.get("linkedin_url")
+                    enriched_chat["attendee_profile_picture"] = profile_data.get("profile_picture") or profile_data.get("picture_url")
+            except Exception as e:
+                logger.warning(f"Failed to enrich chat with profile info: {e}")
+
+        enriched_items.append(enriched_chat)
+
+    # Return enriched result
+    if isinstance(chats, dict):
+        result["data"]["items"] = enriched_items
+    else:
+        result["data"] = enriched_items
+
     return result
 
 
