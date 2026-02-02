@@ -16,6 +16,7 @@ from .routers import (
     business_profiles_router,
 )
 from .routers.linkedin import router as linkedin_router
+from .routers.automation import router as automation_router
 
 # Configure logging
 logging.basicConfig(
@@ -67,6 +68,7 @@ app.include_router(leads_router)
 app.include_router(campaigns_router)
 app.include_router(business_profiles_router)
 app.include_router(linkedin_router)
+app.include_router(automation_router)
 
 
 @app.get("/")

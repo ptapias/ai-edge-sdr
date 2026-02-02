@@ -254,6 +254,100 @@ export const sendChatMessage = async (chatId: string, text: string) => {
   return response.data
 }
 
+// Automation endpoints
+export interface AutomationSettings {
+  id: string
+  enabled: boolean
+  work_start_hour: number
+  work_start_minute: number
+  work_end_hour: number
+  work_end_minute: number
+  working_days: number
+  daily_limit: number
+  min_delay_seconds: number
+  max_delay_seconds: number
+  min_lead_score: number
+  target_statuses: string
+  invitations_sent_today: number
+  last_invitation_at: string | null
+  last_reset_date: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AutomationStatus {
+  enabled: boolean
+  is_working_hour: boolean
+  can_send: boolean
+  invitations_sent_today: number
+  daily_limit: number
+  remaining_today: number
+  next_invitation_in_seconds: number | null
+}
+
+export interface InvitationStats {
+  today: number
+  this_week: number
+  this_month: number
+  total: number
+  success_rate: number
+  by_day: Array<{ date: string; count: number; successful: number }>
+}
+
+export interface InvitationLog {
+  id: string
+  lead_id: string
+  lead_name: string | null
+  lead_company: string | null
+  success: boolean
+  error_message: string | null
+  sent_at: string
+  mode: string
+}
+
+export const getAutomationSettings = async (): Promise<AutomationSettings> => {
+  const response = await api.get('/automation/settings')
+  return response.data
+}
+
+export const updateAutomationSettings = async (settings: Partial<AutomationSettings>): Promise<AutomationSettings> => {
+  const response = await api.patch('/automation/settings', settings)
+  return response.data
+}
+
+export const toggleAutomation = async (enabled: boolean): Promise<AutomationSettings> => {
+  const response = await api.post('/automation/toggle', null, { params: { enabled } })
+  return response.data
+}
+
+export const getAutomationStatus = async (): Promise<AutomationStatus> => {
+  const response = await api.get('/automation/status')
+  return response.data
+}
+
+export const sendNextInvitation = async () => {
+  const response = await api.post('/automation/send-next')
+  return response.data
+}
+
+export const getInvitationLogs = async (limit = 50, mode?: string, success?: boolean): Promise<InvitationLog[]> => {
+  const params: Record<string, unknown> = { limit }
+  if (mode) params.mode = mode
+  if (success !== undefined) params.success = success
+  const response = await api.get('/automation/logs', { params })
+  return response.data
+}
+
+export const getInvitationStats = async (): Promise<InvitationStats> => {
+  const response = await api.get('/automation/stats')
+  return response.data
+}
+
+export const generatePendingMessages = async (limit = 10) => {
+  const response = await api.post('/automation/generate-messages', null, { params: { limit } })
+  return response.data
+}
+
 export const getCampaigns = async (): Promise<Campaign[]> => {
   const response = await api.get('/campaigns/')
   return response.data
