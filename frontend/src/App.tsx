@@ -1,10 +1,11 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { Search, Users, BarChart3, Settings, Zap } from 'lucide-react'
+import { Search, Users, BarChart3, Settings, Zap, MessageSquare } from 'lucide-react'
 import SearchPage from './pages/SearchPage'
 import LeadsPage from './pages/LeadsPage'
 import DashboardPage from './pages/DashboardPage'
 import SettingsPage from './pages/SettingsPage'
 import AutomationPage from './pages/AutomationPage'
+import InboxPage from './pages/InboxPage'
 
 function App() {
   return (
@@ -59,6 +60,19 @@ function App() {
                     Leads
                   </NavLink>
                   <NavLink
+                    to="/inbox"
+                    className={({ isActive }) =>
+                      `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
+                        isActive
+                          ? 'text-blue-600 bg-blue-50'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      }`
+                    }
+                  >
+                    <MessageSquare className="w-4 h-4 mr-2" />
+                    Inbox
+                  </NavLink>
+                  <NavLink
                     to="/automation"
                     className={({ isActive }) =>
                       `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
@@ -96,6 +110,7 @@ function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/leads" element={<LeadsPage />} />
+            <Route path="/inbox" element={<InboxPage />} />
             <Route path="/automation" element={<AutomationPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
