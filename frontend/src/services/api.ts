@@ -197,6 +197,63 @@ export const updateLeadNotes = async (leadId: string, notes: string): Promise<Le
   return response.data
 }
 
+// LinkedIn / Unipile endpoints
+export interface LinkedInConnectionStatus {
+  success: boolean
+  connected: boolean
+  data?: {
+    id: string
+    provider: string
+    status: string
+  }
+  error?: string
+}
+
+export interface SendInvitationResult {
+  lead_id: string
+  lead_name: string
+  success: boolean
+  error?: string
+  data?: unknown
+}
+
+export interface BulkInvitationResult {
+  total: number
+  successful: number
+  failed: number
+  results: SendInvitationResult[]
+}
+
+export const checkLinkedInConnection = async (): Promise<LinkedInConnectionStatus> => {
+  const response = await api.get('/linkedin/status')
+  return response.data
+}
+
+export const sendLinkedInInvitation = async (leadId: string, message?: string): Promise<SendInvitationResult> => {
+  const response = await api.post('/linkedin/send-invitation', { lead_id: leadId, message })
+  return response.data
+}
+
+export const sendBulkInvitations = async (leadIds: string[]): Promise<BulkInvitationResult> => {
+  const response = await api.post('/linkedin/send-invitations/bulk', { lead_ids: leadIds })
+  return response.data
+}
+
+export const getLinkedInChats = async (limit = 50) => {
+  const response = await api.get('/linkedin/chats', { params: { limit } })
+  return response.data
+}
+
+export const getChatMessages = async (chatId: string, limit = 50) => {
+  const response = await api.get(`/linkedin/chats/${chatId}/messages`, { params: { limit } })
+  return response.data
+}
+
+export const sendChatMessage = async (chatId: string, text: string) => {
+  const response = await api.post(`/linkedin/chats/${chatId}/send`, null, { params: { text } })
+  return response.data
+}
+
 export const getCampaigns = async (): Promise<Campaign[]> => {
   const response = await api.get('/campaigns/')
   return response.data

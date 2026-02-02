@@ -19,6 +19,7 @@ from ..models.lead import LeadStatus, LEAD_STATUS_CONFIG
 from ..services.claude_service import ClaudeService
 from ..services.verifier_service import VerifierService
 from ..services.n8n_service import N8NService
+from ..services.unipile_service import UnipileService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/leads", tags=["leads"])
@@ -355,7 +356,7 @@ async def send_linkedin_connection(
     lead_id: str,
     db: Session = Depends(get_db)
 ):
-    """Trigger LinkedIn connection request via N8N."""
+    """Send LinkedIn connection request via Unipile API."""
     lead = db.query(Lead).filter(Lead.id == lead_id).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -366,26 +367,26 @@ async def send_linkedin_connection(
             detail="Generate LinkedIn message first"
         )
 
-    n8n_service = N8NService()
+    if not lead.linkedin_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Lead has no LinkedIn URL"
+        )
 
-    lead_data = {
-        "id": lead.id,
-        "first_name": lead.first_name,
-        "last_name": lead.last_name,
-        "linkedin_url": lead.linkedin_url,
-        "sales_navigator_id": lead.sales_navigator_id,
-        "job_title": lead.job_title,
-        "company_name": lead.company_name,
-    }
+    unipile_service = UnipileService()
 
-    result = await n8n_service.trigger_linkedin_connection(
-        lead_data,
+    # Send invitation via Unipile
+    result = await unipile_service.send_invitation_by_url(
+        lead.linkedin_url,
         lead.linkedin_message
     )
 
     if result["success"]:
-        lead.status = "contacted"
+        lead.status = LeadStatus.INVITATION_SENT.value
         lead.connection_sent_at = datetime.utcnow()
+        # Store provider_id if available
+        if "data" in result and "provider_id" in result.get("data", {}):
+            lead.linkedin_provider_id = result["data"]["provider_id"]
         db.commit()
 
     return result

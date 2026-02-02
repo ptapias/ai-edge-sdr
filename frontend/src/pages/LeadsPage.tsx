@@ -30,9 +30,10 @@ import {
   verifyEmails,
   qualifyLeads,
   generateLinkedInMessage,
-  sendLinkedInConnection,
   getLeadStatuses,
   updateLeadStatus,
+  sendLinkedInInvitation,
+  checkLinkedInConnection,
   type Lead,
   type LeadStatus,
   type LeadStatusValue,
@@ -217,7 +218,7 @@ function MessageModal({
             </button>
             <button
               onClick={onSend}
-              disabled={isSending || lead.status !== 'new'}
+              disabled={isSending || !['new', 'pending'].includes(lead.status)}
               className="btn btn-primary flex items-center"
             >
               {isSending ? (
@@ -225,7 +226,7 @@ function MessageModal({
               ) : (
                 <Send className="w-4 h-4 mr-2" />
               )}
-              Send via N8N
+              Send Invitation
             </button>
           </div>
         </div>
@@ -307,11 +308,19 @@ export default function LeadsPage() {
   })
 
   const sendMutation = useMutation({
-    mutationFn: (leadId: string) => sendLinkedInConnection(leadId),
+    mutationFn: ({ leadId, message }: { leadId: string; message?: string }) =>
+      sendLinkedInInvitation(leadId, message),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leads'] })
       setMessageModal(null)
     },
+  })
+
+  // Check LinkedIn connection status on mount
+  const { data: linkedInStatus } = useQuery({
+    queryKey: ['linkedin-status'],
+    queryFn: checkLinkedInConnection,
+    refetchInterval: 60000, // Check every minute
   })
 
   const statusMutation = useMutation({
@@ -399,7 +408,7 @@ export default function LeadsPage() {
           lead={messageModal.lead}
           message={messageModal.message}
           onClose={() => setMessageModal(null)}
-          onSend={() => sendMutation.mutate(messageModal.lead.id)}
+          onSend={() => sendMutation.mutate({ leadId: messageModal.lead.id, message: messageModal.message })}
           isSending={sendMutation.isPending}
         />
       )}
@@ -415,6 +424,17 @@ export default function LeadsPage() {
               </span>
             )}
           </p>
+        </div>
+        {/* LinkedIn Connection Status */}
+        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm ${
+          linkedInStatus?.connected
+            ? 'bg-green-100 text-green-700'
+            : 'bg-red-100 text-red-700'
+        }`}>
+          <span className={`w-2 h-2 rounded-full ${
+            linkedInStatus?.connected ? 'bg-green-500' : 'bg-red-500'
+          }`} />
+          LinkedIn {linkedInStatus?.connected ? 'Connected' : 'Disconnected'}
         </div>
       </div>
 

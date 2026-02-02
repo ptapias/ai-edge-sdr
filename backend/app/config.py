@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     n8n_base_url: str = "http://localhost:5678"
     n8n_webhook_linkedin: str = "/webhook/linkedin-send"
 
+    # Unipile
+    unipile_api_url: str = "https://api14.unipile.com:14459/api/v1"
+    unipile_api_key: str = ""
+    unipile_account_id: str = ""
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
