@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: linkedin-ai-sdr
+    runtime: python
+    region: frankfurt  # EU region for better latency
+    plan: free
+    buildCommand: |
+      cd frontend && npm install && npm run build
+      mkdir -p ../backend/static
+      cp -r dist/* ../backend/static/
+      cd ../backend && pip install -r requirements.txt
+    startCommand: cd backend && gunicorn app.main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.4"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: APIFY_API_TOKEN
+        sync: false
+      - key: MILLION_VERIFIER_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: UNIPILE_API_URL
+        sync: false
+      - key: UNIPILE_API_KEY
+        sync: false
+      - key: UNIPILE_ACCOUNT_ID
+        sync: false
+      - key: N8N_BASE_URL
+        sync: false
+      - key: N8N_WEBHOOK_LINKEDIN
+        sync: false
+      - key: DEBUG
+        value: "false"
+      - key: APP_NAME
+        value: "LinkedIn AI SDR"

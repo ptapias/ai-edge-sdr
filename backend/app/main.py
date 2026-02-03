@@ -1,11 +1,15 @@
 """
 LinkedIn AI SDR - FastAPI Application Entry Point
 """
+import os
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from .config import get_settings
 from .database import init_db
@@ -57,15 +61,20 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure CORS
+# Configure CORS - include Render URLs
+cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+]
+# Add production URLs from environment
+if os.getenv("CORS_ORIGINS"):
+    cors_origins.extend(os.getenv("CORS_ORIGINS").split(","))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,9 +89,9 @@ app.include_router(linkedin_router)
 app.include_router(automation_router)
 
 
-@app.get("/")
-def root():
-    """Root endpoint - API info."""
+@app.get("/api")
+def api_root():
+    """API root endpoint - API info."""
     return {
         "name": settings.app_name,
         "version": "1.0.0",
@@ -124,3 +133,28 @@ def get_global_stats():
         }
     finally:
         db.close()
+
+
+# Serve static frontend files in production
+# The frontend build is placed in backend/static after build
+STATIC_DIR = Path(__file__).parent.parent / "static"
+
+if STATIC_DIR.exists():
+    # Serve static assets (js, css, images)
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+    # Catch-all route for SPA - must be after all API routes
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve the React SPA for all non-API routes."""
+        # Don't serve index.html for API routes
+        if full_path.startswith("api/"):
+            return {"error": "Not found"}
+
+        # Serve static files if they exist
+        file_path = STATIC_DIR / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(file_path)
+
+        # Otherwise serve index.html for SPA routing
+        return FileResponse(STATIC_DIR / "index.html")
