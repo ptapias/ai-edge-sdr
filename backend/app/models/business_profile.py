@@ -3,7 +3,7 @@ BusinessProfile model - represents the user's business context for AI scoring.
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Text, Boolean
+from sqlalchemy import Column, String, DateTime, Text, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 
 from ..database import Base
@@ -43,6 +43,10 @@ class BusinessProfile(Base):
 
     # Campaigns relationship
     campaigns = relationship("Campaign", back_populates="business_profile")
+
+    # User relationship (multi-tenancy)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    user = relationship("User", back_populates="business_profiles")
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)

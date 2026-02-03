@@ -21,10 +21,17 @@ settings = get_settings()
 class UnipileService:
     """Service for Unipile API interactions (LinkedIn automation)."""
 
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None, account_id: Optional[str] = None):
+        """
+        Initialize UnipileService with optional credentials.
+
+        Args:
+            api_key: Unipile API key (uses config default if not provided)
+            account_id: Unipile account ID (uses config default if not provided)
+        """
         self.base_url = settings.unipile_api_url
-        self.api_key = settings.unipile_api_key
-        self.account_id = settings.unipile_account_id
+        self.api_key = api_key or settings.unipile_api_key
+        self.account_id = account_id or settings.unipile_account_id
         self.headers = {
             "X-API-KEY": self.api_key,
             "Content-Type": "application/json"
@@ -479,5 +486,230 @@ class UnipileService:
             return {
                 "success": False,
                 "connected": False,
+                "error": str(e)
+            }
+
+    async def connect_linkedin_account(
+        self,
+        username: str,
+        password: str
+    ) -> Dict[str, Any]:
+        """
+        Connect a LinkedIn account using username/password credentials.
+
+        This uses Unipile's API to authenticate with LinkedIn.
+        May return a checkpoint (2FA/OTP) that needs to be solved.
+
+        Args:
+            username: LinkedIn email/username
+            password: LinkedIn password
+
+        Returns:
+            Success with account_id, or checkpoint info if 2FA required
+        """
+        url = f"{self.base_url}/accounts"
+
+        payload = {
+            "provider": "LINKEDIN",
+            "username": username,
+            "password": password
+        }
+
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                response = await client.post(
+                    url,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=60.0  # Longer timeout for auth
+                )
+
+                data = response.json() if response.text else {}
+
+                if response.status_code == 200 or response.status_code == 201:
+                    # Successfully connected
+                    logger.info(f"LinkedIn account connected successfully")
+                    return {
+                        "success": True,
+                        "connected": True,
+                        "account_id": data.get("account_id") or data.get("id"),
+                        "data": data
+                    }
+                elif response.status_code == 202:
+                    # Checkpoint required (2FA, OTP, etc.)
+                    checkpoint_type = data.get("checkpoint") or data.get("type")
+                    logger.info(f"LinkedIn connection requires checkpoint: {checkpoint_type}")
+                    return {
+                        "success": True,
+                        "connected": False,
+                        "requires_checkpoint": True,
+                        "checkpoint_type": checkpoint_type,
+                        "account_id": data.get("account_id") or data.get("id"),
+                        "data": data
+                    }
+                else:
+                    logger.error(f"Failed to connect LinkedIn: {response.status_code} - {response.text}")
+                    return {
+                        "success": False,
+                        "error": data.get("message") or data.get("error") or response.text,
+                        "status_code": response.status_code
+                    }
+
+        except Exception as e:
+            logger.error(f"Error connecting LinkedIn account: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def solve_checkpoint(
+        self,
+        account_id: str,
+        code: str
+    ) -> Dict[str, Any]:
+        """
+        Solve a LinkedIn checkpoint (2FA/OTP).
+
+        Must be called within 5 minutes of the checkpoint being issued.
+
+        Args:
+            account_id: The account ID from the connect response
+            code: The verification code from the user
+
+        Returns:
+            Success if checkpoint solved, error otherwise
+        """
+        url = f"{self.base_url}/accounts/checkpoint"
+
+        payload = {
+            "provider": "LINKEDIN",
+            "account_id": account_id,
+            "code": code
+        }
+
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                response = await client.post(
+                    url,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=30.0
+                )
+
+                data = response.json() if response.text else {}
+
+                if response.status_code == 200 or response.status_code == 201:
+                    logger.info(f"LinkedIn checkpoint solved successfully")
+                    return {
+                        "success": True,
+                        "connected": True,
+                        "account_id": account_id,
+                        "data": data
+                    }
+                elif response.status_code == 202:
+                    # Another checkpoint required
+                    checkpoint_type = data.get("checkpoint") or data.get("type")
+                    logger.info(f"Another checkpoint required: {checkpoint_type}")
+                    return {
+                        "success": True,
+                        "connected": False,
+                        "requires_checkpoint": True,
+                        "checkpoint_type": checkpoint_type,
+                        "account_id": account_id,
+                        "data": data
+                    }
+                else:
+                    logger.error(f"Failed to solve checkpoint: {response.status_code} - {response.text}")
+                    return {
+                        "success": False,
+                        "error": data.get("message") or data.get("error") or response.text,
+                        "status_code": response.status_code
+                    }
+
+        except Exception as e:
+            logger.error(f"Error solving checkpoint: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def get_account_info(self, account_id: str) -> Dict[str, Any]:
+        """
+        Get information about a specific Unipile account.
+
+        Args:
+            account_id: The Unipile account ID
+
+        Returns:
+            Account information including status and profile data
+        """
+        url = f"{self.base_url}/accounts/{account_id}"
+
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                response = await client.get(
+                    url,
+                    headers=self.headers,
+                    timeout=30.0
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    return {
+                        "success": True,
+                        "data": data,
+                        "status": data.get("status"),
+                        "name": data.get("name"),
+                        "email": data.get("email")
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": response.text,
+                        "status_code": response.status_code
+                    }
+
+        except Exception as e:
+            logger.error(f"Error getting account info: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def delete_account(self, account_id: str) -> Dict[str, Any]:
+        """
+        Delete/disconnect a LinkedIn account from Unipile.
+
+        Args:
+            account_id: The Unipile account ID to delete
+
+        Returns:
+            Success or error
+        """
+        url = f"{self.base_url}/accounts/{account_id}"
+
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                response = await client.delete(
+                    url,
+                    headers=self.headers,
+                    timeout=30.0
+                )
+
+                if response.status_code in (200, 204):
+                    logger.info(f"Account {account_id} deleted successfully")
+                    return {"success": True}
+                else:
+                    logger.error(f"Failed to delete account: {response.status_code} - {response.text}")
+                    return {
+                        "success": False,
+                        "error": response.text,
+                        "status_code": response.status_code
+                    }
+
+        except Exception as e:
+            logger.error(f"Error deleting account: {e}")
+            return {
+                "success": False,
                 "error": str(e)
             }

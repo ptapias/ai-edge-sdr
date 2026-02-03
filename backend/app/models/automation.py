@@ -4,7 +4,8 @@ Automation settings model for automatic LinkedIn outreach.
 import uuid
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, Time
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, Time, ForeignKey
+from sqlalchemy.orm import relationship
 
 from ..database import Base
 
@@ -15,6 +16,10 @@ class AutomationSettings(Base):
     __tablename__ = "automation_settings"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    # User relationship (multi-tenancy) - one settings per user
+    user_id = Column(String(36), ForeignKey("users.id"), unique=True, nullable=True, index=True)
+    user = relationship("User", back_populates="automation_settings")
 
     # Toggle
     enabled = Column(Boolean, default=False)
@@ -116,6 +121,11 @@ class InvitationLog(Base):
     __tablename__ = "invitation_logs"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    # User relationship (multi-tenancy)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    user = relationship("User", back_populates="invitation_logs")
+
     lead_id = Column(String(36), nullable=False)
     lead_name = Column(String(200), nullable=True)
     lead_company = Column(String(200), nullable=True)

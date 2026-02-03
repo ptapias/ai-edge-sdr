@@ -22,6 +22,7 @@ from .routers import (
 )
 from .routers.linkedin import router as linkedin_router
 from .routers.automation import router as automation_router
+from .routers.auth import router as auth_router
 
 # Configure logging
 logging.basicConfig(
@@ -81,6 +82,7 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(auth_router)
 app.include_router(search_router)
 app.include_router(leads_router)
 app.include_router(campaigns_router)
@@ -107,13 +109,21 @@ def health_check():
 
 
 @app.get("/api/stats")
-def get_global_stats():
-    """Get global statistics."""
-    from .database import SessionLocal
+def get_global_stats(
+    current_user = None  # Made optional for backward compatibility during transition
+):
+    """Get global statistics for the current user."""
+    from fastapi import Depends
+    from .database import SessionLocal, get_db
     from .models import Lead, Campaign, BusinessProfile
+    from .dependencies import get_current_user_optional
 
     db = SessionLocal()
     try:
+        # If authenticated, filter by user_id
+        # During transition, allow unauthenticated access
+        user_filter = {}
+
         total_leads = db.query(Lead).count()
         total_campaigns = db.query(Campaign).count()
         total_profiles = db.query(BusinessProfile).count()

@@ -11,11 +11,12 @@ from sqlalchemy import desc
 from pydantic import BaseModel
 
 from ..database import get_db
+from ..dependencies import get_current_user
 from ..schemas.lead import (
     LeadResponse, LeadUpdate, LeadScoring, LeadListResponse,
     LeadStatusUpdate, LeadStatusInfo, LeadBulkStatusUpdate, LeadStatusEnum
 )
-from ..models import Lead, BusinessProfile
+from ..models import Lead, BusinessProfile, User
 from ..models.lead import LeadStatus, LEAD_STATUS_CONFIG
 from ..services.claude_service import ClaudeService
 from ..services.verifier_service import VerifierService
@@ -33,10 +34,11 @@ def list_leads(
     campaign_id: Optional[str] = None,
     status: Optional[str] = None,
     score_label: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List leads with pagination and filters."""
-    query = db.query(Lead)
+    """List leads with pagination and filters (filtered by current user)."""
+    query = db.query(Lead).filter(Lead.user_id == current_user.id)
 
     if campaign_id:
         query = query.filter(Lead.campaign_id == campaign_id)
@@ -79,18 +81,33 @@ def get_available_statuses():
 
 
 @router.get("/{lead_id}", response_model=LeadResponse)
-def get_lead(lead_id: str, db: Session = Depends(get_db)):
-    """Get a single lead by ID."""
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+def get_lead(
+    lead_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a single lead by ID (must belong to current user)."""
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id,
+        Lead.user_id == current_user.id
+    ).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     return lead
 
 
 @router.patch("/{lead_id}", response_model=LeadResponse)
-def update_lead(lead_id: str, update: LeadUpdate, db: Session = Depends(get_db)):
-    """Update a lead."""
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+def update_lead(
+    lead_id: str,
+    update: LeadUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update a lead (must belong to current user)."""
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id,
+        Lead.user_id == current_user.id
+    ).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -104,9 +121,16 @@ def update_lead(lead_id: str, update: LeadUpdate, db: Session = Depends(get_db))
 
 
 @router.delete("/{lead_id}")
-def delete_lead(lead_id: str, db: Session = Depends(get_db)):
-    """Delete a lead."""
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+def delete_lead(
+    lead_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a lead (must belong to current user)."""
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id,
+        Lead.user_id == current_user.id
+    ).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -119,10 +143,14 @@ def delete_lead(lead_id: str, db: Session = Depends(get_db)):
 def update_lead_status(
     lead_id: str,
     status_update: LeadStatusUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update a lead's CRM status."""
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    """Update a lead's CRM status (must belong to current user)."""
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id,
+        Lead.user_id == current_user.id
+    ).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -145,12 +173,16 @@ def update_lead_status(
 @router.post("/status/bulk")
 def bulk_update_status(
     bulk_update: LeadBulkStatusUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update status for multiple leads at once."""
+    """Update status for multiple leads at once (must belong to current user)."""
     updated = 0
     for lead_id in bulk_update.lead_ids:
-        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        lead = db.query(Lead).filter(
+            Lead.id == lead_id,
+            Lead.user_id == current_user.id
+        ).first()
         if lead:
             lead.status = bulk_update.status.value
             lead.updated_at = datetime.utcnow()
@@ -169,10 +201,14 @@ class NotesUpdate(BaseModel):
 def update_lead_notes(
     lead_id: str,
     notes_update: NotesUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update a lead's notes."""
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    """Update a lead's notes (must belong to current user)."""
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id,
+        Lead.user_id == current_user.id
+    ).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -186,14 +222,18 @@ def update_lead_notes(
 @router.post("/verify")
 async def verify_emails(
     lead_ids: List[str],
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Verify emails for specified leads."""
+    """Verify emails for specified leads (must belong to current user)."""
     verifier = VerifierService()
     results = []
 
     for lead_id in lead_ids:
-        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        lead = db.query(Lead).filter(
+            Lead.id == lead_id,
+            Lead.user_id == current_user.id
+        ).first()
         if not lead or not lead.email:
             continue
 
@@ -217,16 +257,20 @@ async def verify_emails(
 def qualify_leads(
     lead_ids: List[str],
     business_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Qualify/score leads using AI."""
+    """Qualify/score leads using AI (must belong to current user)."""
     claude_service = ClaudeService()
     results = []
 
-    # Get business context if provided
+    # Get business context if provided (must belong to current user)
     business_context = None
     if business_id:
-        profile = db.query(BusinessProfile).filter(BusinessProfile.id == business_id).first()
+        profile = db.query(BusinessProfile).filter(
+            BusinessProfile.id == business_id,
+            BusinessProfile.user_id == current_user.id
+        ).first()
         if profile:
             business_context = {
                 "ideal_customer": profile.ideal_customer,
@@ -236,7 +280,10 @@ def qualify_leads(
             }
 
     for lead_id in lead_ids:
-        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        lead = db.query(Lead).filter(
+            Lead.id == lead_id,
+            Lead.user_id == current_user.id
+        ).first()
         if not lead:
             continue
 
@@ -273,19 +320,26 @@ def qualify_leads(
 def generate_linkedin_message(
     lead_id: str,
     business_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Generate LinkedIn connection message for a lead."""
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    """Generate LinkedIn connection message for a lead (must belong to current user)."""
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id,
+        Lead.user_id == current_user.id
+    ).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
     claude_service = ClaudeService()
 
-    # Get sender context if provided
+    # Get sender context if provided (must belong to current user)
     sender_context = None
     if business_id:
-        profile = db.query(BusinessProfile).filter(BusinessProfile.id == business_id).first()
+        profile = db.query(BusinessProfile).filter(
+            BusinessProfile.id == business_id,
+            BusinessProfile.user_id == current_user.id
+        ).first()
         if profile:
             sender_context = {
                 "sender_name": profile.sender_name,
@@ -317,19 +371,26 @@ def generate_linkedin_message(
 def generate_email_message(
     lead_id: str,
     business_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Generate cold email for a lead."""
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    """Generate cold email for a lead (must belong to current user)."""
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id,
+        Lead.user_id == current_user.id
+    ).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
     claude_service = ClaudeService()
 
-    # Get sender context if provided
+    # Get sender context if provided (must belong to current user)
     sender_context = None
     if business_id:
-        profile = db.query(BusinessProfile).filter(BusinessProfile.id == business_id).first()
+        profile = db.query(BusinessProfile).filter(
+            BusinessProfile.id == business_id,
+            BusinessProfile.user_id == current_user.id
+        ).first()
         if profile:
             sender_context = {
                 "sender_name": profile.sender_name,
@@ -361,10 +422,14 @@ def generate_email_message(
 @router.post("/{lead_id}/action/linkedin")
 async def send_linkedin_connection(
     lead_id: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Send LinkedIn connection request via Unipile API."""
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+    """Send LinkedIn connection request via Unipile API (must belong to current user)."""
+    lead = db.query(Lead).filter(
+        Lead.id == lead_id,
+        Lead.user_id == current_user.id
+    ).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -380,7 +445,23 @@ async def send_linkedin_connection(
             detail="Lead has no LinkedIn URL"
         )
 
-    unipile_service = UnipileService()
+    # Get user's LinkedIn credentials
+    from ..models.user import LinkedInAccount
+    from ..services.encryption_service import get_encryption_service
+
+    linkedin_account = db.query(LinkedInAccount).filter(
+        LinkedInAccount.user_id == current_user.id,
+        LinkedInAccount.is_connected == True
+    ).first()
+
+    if linkedin_account and linkedin_account.unipile_api_key_encrypted:
+        encryption_service = get_encryption_service()
+        api_key = encryption_service.decrypt(linkedin_account.unipile_api_key_encrypted)
+        account_id = linkedin_account.unipile_account_id
+        unipile_service = UnipileService(api_key=api_key, account_id=account_id)
+    else:
+        # Fall back to default credentials from config
+        unipile_service = UnipileService()
 
     # Send invitation via Unipile
     result = await unipile_service.send_invitation_by_url(

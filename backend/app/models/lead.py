@@ -108,6 +108,10 @@ class Lead(Base):
     campaign_id = Column(String(36), ForeignKey("campaigns.id"), nullable=True)
     campaign = relationship("Campaign", back_populates="leads")
 
+    # User relationship (multi-tenancy)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    user = relationship("User", back_populates="leads")
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from ..database import get_db
+from ..dependencies import get_current_user
 from ..schemas.campaign import CampaignCreate, CampaignResponse, CampaignUpdate
-from ..models import Campaign
+from ..models import Campaign, User
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
 
@@ -18,11 +19,13 @@ router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
 def list_campaigns(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List all campaigns."""
+    """List all campaigns (filtered by current user)."""
     campaigns = (
         db.query(Campaign)
+        .filter(Campaign.user_id == current_user.id)
         .order_by(desc(Campaign.created_at))
         .offset(skip)
         .limit(limit)
@@ -32,18 +35,32 @@ def list_campaigns(
 
 
 @router.get("/{campaign_id}", response_model=CampaignResponse)
-def get_campaign(campaign_id: str, db: Session = Depends(get_db)):
-    """Get a single campaign by ID."""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+def get_campaign(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get a single campaign by ID (must belong to current user)."""
+    campaign = db.query(Campaign).filter(
+        Campaign.id == campaign_id,
+        Campaign.user_id == current_user.id
+    ).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return campaign
 
 
 @router.post("/", response_model=CampaignResponse)
-def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db)):
-    """Create a new campaign."""
-    db_campaign = Campaign(**campaign.model_dump())
+def create_campaign(
+    campaign: CampaignCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new campaign (assigned to current user)."""
+    db_campaign = Campaign(
+        **campaign.model_dump(),
+        user_id=current_user.id
+    )
     db.add(db_campaign)
     db.commit()
     db.refresh(db_campaign)
@@ -54,10 +71,14 @@ def create_campaign(campaign: CampaignCreate, db: Session = Depends(get_db)):
 def update_campaign(
     campaign_id: str,
     update: CampaignUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update a campaign."""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+    """Update a campaign (must belong to current user)."""
+    campaign = db.query(Campaign).filter(
+        Campaign.id == campaign_id,
+        Campaign.user_id == current_user.id
+    ).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
@@ -71,9 +92,16 @@ def update_campaign(
 
 
 @router.delete("/{campaign_id}")
-def delete_campaign(campaign_id: str, db: Session = Depends(get_db)):
-    """Delete a campaign and all its leads."""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+def delete_campaign(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a campaign and all its leads (must belong to current user)."""
+    campaign = db.query(Campaign).filter(
+        Campaign.id == campaign_id,
+        Campaign.user_id == current_user.id
+    ).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
@@ -83,9 +111,16 @@ def delete_campaign(campaign_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{campaign_id}/stats")
-def get_campaign_stats(campaign_id: str, db: Session = Depends(get_db)):
-    """Get statistics for a campaign."""
-    campaign = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+def get_campaign_stats(
+    campaign_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get statistics for a campaign (must belong to current user)."""
+    campaign = db.query(Campaign).filter(
+        Campaign.id == campaign_id,
+        Campaign.user_id == current_user.id
+    ).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
 

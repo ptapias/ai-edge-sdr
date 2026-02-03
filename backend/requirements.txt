@@ -29,3 +29,8 @@ uuid6==2024.1.12
 
 # Production server
 gunicorn==21.2.0
+
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+cryptography==42.0.0

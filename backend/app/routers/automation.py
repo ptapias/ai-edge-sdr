@@ -12,8 +12,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
 from ..database import get_db
-from ..models import Lead, AutomationSettings, InvitationLog, BusinessProfile, Campaign
+from ..dependencies import get_current_user
+from ..models import Lead, AutomationSettings, InvitationLog, BusinessProfile, Campaign, User
 from ..models.lead import LeadStatus
+from ..models.user import LinkedInAccount
 from ..schemas.automation import (
     AutomationSettingsResponse,
     AutomationSettingsUpdate,
@@ -24,36 +26,60 @@ from ..schemas.automation import (
 from ..services.unipile_service import UnipileService
 from ..services.claude_service import ClaudeService
 from ..services.scheduler_service import is_scheduler_running
+from ..services.encryption_service import get_encryption_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/automation", tags=["automation"])
 
 
-def get_or_create_settings(db: Session) -> AutomationSettings:
-    """Get or create automation settings (singleton)."""
-    settings = db.query(AutomationSettings).first()
+def get_or_create_settings(db: Session, user_id: str) -> AutomationSettings:
+    """Get or create automation settings for a specific user."""
+    settings = db.query(AutomationSettings).filter(
+        AutomationSettings.user_id == user_id
+    ).first()
     if not settings:
-        settings = AutomationSettings()
+        settings = AutomationSettings(user_id=user_id)
         db.add(settings)
         db.commit()
         db.refresh(settings)
     return settings
 
 
+def get_user_unipile_service(current_user: User, db: Session) -> UnipileService:
+    """Get UnipileService with user's credentials if available, else default."""
+    linkedin_account = db.query(LinkedInAccount).filter(
+        LinkedInAccount.user_id == current_user.id,
+        LinkedInAccount.is_connected == True
+    ).first()
+
+    if linkedin_account and linkedin_account.unipile_api_key_encrypted:
+        encryption_service = get_encryption_service()
+        api_key = encryption_service.decrypt(linkedin_account.unipile_api_key_encrypted)
+        account_id = linkedin_account.unipile_account_id
+        return UnipileService(api_key=api_key, account_id=account_id)
+    else:
+        # Fall back to default credentials from config
+        return UnipileService()
+
+
 @router.get("/settings", response_model=AutomationSettingsResponse)
-def get_automation_settings(db: Session = Depends(get_db)):
-    """Get current automation settings."""
-    settings = get_or_create_settings(db)
+def get_automation_settings(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get current automation settings for the authenticated user."""
+    settings = get_or_create_settings(db, current_user.id)
     return settings
 
 
 @router.patch("/settings", response_model=AutomationSettingsResponse)
 def update_automation_settings(
     update: AutomationSettingsUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Update automation settings."""
-    settings = get_or_create_settings(db)
+    """Update automation settings for the authenticated user."""
+    settings = get_or_create_settings(db, current_user.id)
 
     update_data = update.model_dump(exclude_unset=True)
 
@@ -73,23 +99,27 @@ def update_automation_settings(
 @router.post("/toggle", response_model=AutomationSettingsResponse)
 def toggle_automation(
     enabled: bool,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Enable or disable automation."""
-    settings = get_or_create_settings(db)
+    """Enable or disable automation for the authenticated user."""
+    settings = get_or_create_settings(db, current_user.id)
     settings.enabled = enabled
     settings.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(settings)
 
-    logger.info(f"Automation {'enabled' if enabled else 'disabled'}")
+    logger.info(f"Automation {'enabled' if enabled else 'disabled'} for user {current_user.email}")
     return settings
 
 
 @router.get("/status", response_model=AutomationStatusResponse)
-def get_automation_status(db: Session = Depends(get_db)):
-    """Get current automation status."""
-    settings = get_or_create_settings(db)
+def get_automation_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get current automation status for the authenticated user."""
+    settings = get_or_create_settings(db, current_user.id)
 
     # Reset daily counter if it's a new day
     today = datetime.utcnow().date()
@@ -129,14 +159,15 @@ def get_automation_status(db: Session = Depends(get_db)):
 @router.post("/send-next")
 async def send_next_invitation(
     background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Send the next invitation (manual trigger for automatic mode).
+    Send the next invitation for the authenticated user (manual trigger for automatic mode).
 
     This endpoint can be called by a cron job or external scheduler.
     """
-    settings = get_or_create_settings(db)
+    settings = get_or_create_settings(db, current_user.id)
 
     # Reset daily counter if it's a new day
     today = datetime.utcnow().date()
@@ -167,20 +198,29 @@ async def send_next_invitation(
                 "invitations_today": settings.invitations_sent_today
             }
 
-    # Find next lead to contact
+    # Find next lead to contact (owned by current user)
     target_statuses = settings.target_statuses.split(",")
     query = db.query(Lead).filter(
+        Lead.user_id == current_user.id,
         Lead.status.in_(target_statuses),
         Lead.linkedin_url.isnot(None),
         Lead.linkedin_message.isnot(None)
     )
 
-    # Apply campaign filter if set
+    # Apply campaign filter if set (must belong to current user)
     campaign_name = None
     if settings.target_campaign_id:
-        query = query.filter(Lead.campaign_id == settings.target_campaign_id)
-        campaign = db.query(Campaign).filter(Campaign.id == settings.target_campaign_id).first()
-        campaign_name = campaign.name if campaign else None
+        campaign = db.query(Campaign).filter(
+            Campaign.id == settings.target_campaign_id,
+            Campaign.user_id == current_user.id
+        ).first()
+        if campaign:
+            query = query.filter(Lead.campaign_id == settings.target_campaign_id)
+            campaign_name = campaign.name
+        else:
+            # Campaign doesn't exist or doesn't belong to user
+            settings.target_campaign_id = None
+            db.commit()
 
     # Apply score filter
     if settings.min_lead_score > 0:
@@ -197,8 +237,8 @@ async def send_next_invitation(
             "invitations_today": settings.invitations_sent_today
         }
 
-    # Send invitation via Unipile
-    unipile = UnipileService()
+    # Send invitation via Unipile (using user's credentials)
+    unipile = get_user_unipile_service(current_user, db)
     result = await unipile.send_invitation_by_url(lead.linkedin_url, lead.linkedin_message)
 
     # Get campaign name for the log
@@ -208,6 +248,7 @@ async def send_next_invitation(
 
     # Log the attempt with full details
     log = InvitationLog(
+        user_id=current_user.id,
         lead_id=lead.id,
         lead_name=f"{lead.first_name} {lead.last_name}",
         lead_company=lead.company_name,
@@ -231,7 +272,7 @@ async def send_next_invitation(
         settings.invitations_sent_today += 1
         settings.last_invitation_at = datetime.utcnow()
 
-        logger.info(f"Auto-sent invitation to {lead.first_name} {lead.last_name}")
+        logger.info(f"Auto-sent invitation to {lead.first_name} {lead.last_name} for user {current_user.email}")
 
     db.commit()
 
@@ -255,10 +296,11 @@ def get_invitation_logs(
     limit: int = 50,
     mode: Optional[str] = None,
     success: Optional[bool] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get invitation logs."""
-    query = db.query(InvitationLog)
+    """Get invitation logs for the authenticated user."""
+    query = db.query(InvitationLog).filter(InvitationLog.user_id == current_user.id)
 
     if mode:
         query = query.filter(InvitationLog.mode == mode)
@@ -270,36 +312,49 @@ def get_invitation_logs(
 
 
 @router.get("/stats", response_model=InvitationStatsResponse)
-def get_invitation_stats(db: Session = Depends(get_db)):
-    """Get invitation statistics."""
+def get_invitation_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get invitation statistics for the authenticated user."""
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=now.weekday())
     month_start = today_start.replace(day=1)
 
+    # Base query filtered by user
+    base_query = db.query(InvitationLog).filter(InvitationLog.user_id == current_user.id)
+
     # Count queries - ONLY count successful invitations
-    today_count = db.query(InvitationLog).filter(
+    today_count = base_query.filter(
         InvitationLog.sent_at >= today_start,
         InvitationLog.success == True
     ).count()
-    week_count = db.query(InvitationLog).filter(
+    week_count = base_query.filter(
         InvitationLog.sent_at >= week_start,
         InvitationLog.success == True
     ).count()
-    month_count = db.query(InvitationLog).filter(
+    month_count = base_query.filter(
         InvitationLog.sent_at >= month_start,
         InvitationLog.success == True
     ).count()
-    total_count = db.query(InvitationLog).filter(InvitationLog.success == True).count()
+    total_count = base_query.filter(InvitationLog.success == True).count()
 
     # Success rate (API calls)
-    successful_count = db.query(InvitationLog).filter(InvitationLog.success == True).count()
-    success_rate = (successful_count / total_count * 100) if total_count > 0 else 0
+    total_attempts = base_query.count()
+    successful_count = base_query.filter(InvitationLog.success == True).count()
+    success_rate = (successful_count / total_attempts * 100) if total_attempts > 0 else 0
 
     # Acceptance rate (actual LinkedIn acceptances)
-    # Count leads that have been sent invitations vs those who connected
-    sent_count = db.query(Lead).filter(Lead.status == "invitation_sent").count()
-    connected_count = db.query(Lead).filter(Lead.status == "connected").count()
+    # Count leads that have been sent invitations vs those who connected (for current user)
+    sent_count = db.query(Lead).filter(
+        Lead.user_id == current_user.id,
+        Lead.status == "invitation_sent"
+    ).count()
+    connected_count = db.query(Lead).filter(
+        Lead.user_id == current_user.id,
+        Lead.status == "connected"
+    ).count()
     total_invited = sent_count + connected_count
     acceptance_rate = (connected_count / total_invited * 100) if total_invited > 0 else 0
 
@@ -308,11 +363,11 @@ def get_invitation_stats(db: Session = Depends(get_db)):
     for i in range(7):
         day_start = today_start - timedelta(days=i)
         day_end = day_start + timedelta(days=1)
-        day_total = db.query(InvitationLog).filter(
+        day_total = base_query.filter(
             InvitationLog.sent_at >= day_start,
             InvitationLog.sent_at < day_end
         ).count()
-        day_successful = db.query(InvitationLog).filter(
+        day_successful = base_query.filter(
             InvitationLog.sent_at >= day_start,
             InvitationLog.sent_at < day_end,
             InvitationLog.success == True
@@ -339,16 +394,18 @@ def get_invitation_stats(db: Session = Depends(get_db)):
 @router.get("/queue")
 def get_invitation_queue(
     limit: int = 10,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Get the next leads in the invitation queue.
+    Get the next leads in the invitation queue for the authenticated user.
     Shows what will be sent next based on current settings.
     """
-    settings = get_or_create_settings(db)
+    settings = get_or_create_settings(db, current_user.id)
     target_statuses = settings.target_statuses.split(",")
 
     query = db.query(Lead).filter(
+        Lead.user_id == current_user.id,
         Lead.status.in_(target_statuses),
         Lead.linkedin_url.isnot(None),
         Lead.linkedin_message.isnot(None)
@@ -403,19 +460,24 @@ def get_invitation_queue(
 @router.post("/generate-messages")
 def generate_messages_for_pending(
     limit: int = 10,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Generate LinkedIn messages for leads that don't have one.
+    Generate LinkedIn messages for leads that don't have one (for current user).
     This prepares leads for automatic sending.
     """
-    # Get default business profile
-    profile = db.query(BusinessProfile).filter(BusinessProfile.is_default == True).first()
+    # Get default business profile for current user
+    profile = db.query(BusinessProfile).filter(
+        BusinessProfile.is_default == True,
+        BusinessProfile.user_id == current_user.id
+    ).first()
     if not profile:
-        raise HTTPException(status_code=400, detail="No default business profile found")
+        raise HTTPException(status_code=400, detail="No default business profile found. Please create one first.")
 
-    # Find leads without messages
+    # Find leads without messages (owned by current user)
     leads = db.query(Lead).filter(
+        Lead.user_id == current_user.id,
         Lead.linkedin_url.isnot(None),
         Lead.linkedin_message.is_(None),
         Lead.status.in_(["new", "pending"])

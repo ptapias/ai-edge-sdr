@@ -9,9 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..dependencies import get_current_user
 from ..schemas.search import SearchRequest, SearchResponse, NLToFiltersResponse
 from ..schemas.lead import LeadCreate
-from ..models import Lead, Campaign
+from ..models import Lead, Campaign, User
 from ..services.apify_service import ApifyService
 from ..services.claude_service import ClaudeService
 
@@ -20,9 +21,13 @@ router = APIRouter(prefix="/api/search", tags=["search"])
 
 
 @router.post("/", response_model=SearchResponse)
-def search_leads(request: SearchRequest, db: Session = Depends(get_db)):
+def search_leads(
+    request: SearchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
-    Search for leads using natural language query.
+    Search for leads using natural language query (assigned to current user).
 
     1. Converts NL query to Apify filters using Claude
     2. Executes Apify actor to fetch leads
@@ -41,12 +46,13 @@ def search_leads(request: SearchRequest, db: Session = Depends(get_db)):
     logger.info(f"Interpreted as: {nl_result.interpretation}")
     logger.info(f"Filters: {nl_result.filters.model_dump()}")
 
-    # Step 2: Create campaign
+    # Step 2: Create campaign (assigned to current user)
     campaign = Campaign(
         name=request.campaign_name or f"Search: {request.query[:50]}",
         search_query=request.query,
         search_filters=json.dumps(nl_result.filters.model_dump()),
-        business_id=request.business_id
+        business_id=request.business_id,
+        user_id=current_user.id
     )
     db.add(campaign)
     db.flush()  # Get campaign ID
@@ -58,13 +64,14 @@ def search_leads(request: SearchRequest, db: Session = Depends(get_db)):
         logger.error(f"Apify search failed: {e}")
         raise HTTPException(status_code=500, detail=f"Lead search failed: {str(e)}")
 
-    # Step 4: Transform and store leads
+    # Step 4: Transform and store leads (assigned to current user)
     lead_count = 0
     for raw_lead in raw_leads:
         lead_data = apify_service.transform_lead(raw_lead)
         lead = Lead(
             **lead_data,
-            campaign_id=campaign.id
+            campaign_id=campaign.id,
+            user_id=current_user.id
         )
         db.add(lead)
         lead_count += 1
@@ -85,7 +92,10 @@ def search_leads(request: SearchRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/preview", response_model=NLToFiltersResponse)
-def preview_search(request: SearchRequest):
+def preview_search(
+    request: SearchRequest,
+    current_user: User = Depends(get_current_user)
+):
     """
     Preview how a natural language query will be interpreted.
     Does not execute the actual search.

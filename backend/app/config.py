@@ -30,10 +30,19 @@ class Settings(BaseSettings):
     n8n_base_url: str = "http://localhost:5678"
     n8n_webhook_linkedin: str = "/webhook/linkedin-send"
 
-    # Unipile
+    # Unipile (default values for backward compatibility)
     unipile_api_url: str = "https://api14.unipile.com:14459/api/v1"
     unipile_api_key: str = ""
     unipile_account_id: str = ""
+
+    # JWT Authentication
+    jwt_secret_key: str = "your-super-secret-key-change-in-production-min-32-chars"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+
+    # Encryption for sensitive data (Fernet key)
+    encryption_key: str = ""
 
     class Config:
         env_file = ".env"

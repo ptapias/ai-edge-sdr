@@ -15,15 +15,38 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from ..database import get_db
-from ..models import Lead
+from ..dependencies import get_current_user
+from ..models import Lead, User
 from ..models.lead import LeadStatus
+from ..models.user import LinkedInAccount
 from ..services.unipile_service import UnipileService
 from ..services.claude_service import ClaudeService
 from ..services.cache_service import get_unipile_cache
+from ..services.encryption_service import get_encryption_service
 from ..models import BusinessProfile
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/linkedin", tags=["linkedin"])
+
+
+def get_user_unipile_service(
+    current_user: User,
+    db: Session
+) -> UnipileService:
+    """Get UnipileService with user's credentials if available, else default."""
+    linkedin_account = db.query(LinkedInAccount).filter(
+        LinkedInAccount.user_id == current_user.id,
+        LinkedInAccount.is_connected == True
+    ).first()
+
+    if linkedin_account and linkedin_account.unipile_api_key_encrypted:
+        encryption_service = get_encryption_service()
+        api_key = encryption_service.decrypt(linkedin_account.unipile_api_key_encrypted)
+        account_id = linkedin_account.unipile_account_id
+        return UnipileService(api_key=api_key, account_id=account_id)
+    else:
+        # Fall back to default credentials from config
+        return UnipileService()
 
 
 class InvitationRequest(BaseModel):
@@ -38,20 +61,25 @@ class BulkInvitationRequest(BaseModel):
 
 
 @router.get("/status")
-async def check_linkedin_connection():
+async def check_linkedin_connection(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
     Check Unipile connection status.
 
     Returns:
         Connection status and account info
     """
-    unipile = UnipileService()
+    unipile = get_user_unipile_service(current_user, db)
     result = await unipile.check_connection_status()
     return result
 
 
 @router.get("/cache-status")
-async def get_cache_status():
+async def get_cache_status(
+    current_user: User = Depends(get_current_user)
+):
     """
     Get cache status for all Unipile data.
 
@@ -75,10 +103,11 @@ async def get_cache_status():
 @router.post("/send-invitation")
 async def send_single_invitation(
     request: InvitationRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Send LinkedIn invitation to a single lead.
+    Send LinkedIn invitation to a single lead (must belong to current user).
 
     Args:
         request: Invitation request with lead_id and optional message
@@ -86,7 +115,10 @@ async def send_single_invitation(
     Returns:
         Result of the invitation attempt
     """
-    lead = db.query(Lead).filter(Lead.id == request.lead_id).first()
+    lead = db.query(Lead).filter(
+        Lead.id == request.lead_id,
+        Lead.user_id == current_user.id
+    ).first()
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -100,7 +132,7 @@ async def send_single_invitation(
             detail="No message provided and lead has no generated message"
         )
 
-    unipile = UnipileService()
+    unipile = get_user_unipile_service(current_user, db)
     result = await unipile.send_invitation_by_url(lead.linkedin_url, message)
 
     if result["success"]:
@@ -119,10 +151,11 @@ async def send_single_invitation(
 @router.post("/send-invitations/bulk")
 async def send_bulk_invitations(
     request: BulkInvitationRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Send LinkedIn invitations to multiple leads.
+    Send LinkedIn invitations to multiple leads (must belong to current user).
 
     Note: This sends invitations sequentially to avoid rate limiting.
     For production use with many leads, use the automatic mode instead.
@@ -134,10 +167,13 @@ async def send_bulk_invitations(
         Results for each lead
     """
     results = []
-    unipile = UnipileService()
+    unipile = get_user_unipile_service(current_user, db)
 
     for lead_id in request.lead_ids:
-        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        lead = db.query(Lead).filter(
+            Lead.id == lead_id,
+            Lead.user_id == current_user.id
+        ).first()
         if not lead:
             results.append({
                 "lead_id": lead_id,
@@ -201,7 +237,9 @@ async def send_bulk_invitations(
 async def get_linkedin_chats(
     limit: int = Query(50, ge=1, le=100),
     enrich: bool = Query(True, description="Enrich chats with attendee profile info"),
-    force_refresh: bool = Query(False, description="Force refresh from LinkedIn API (use sparingly!)")
+    force_refresh: bool = Query(False, description="Force refresh from LinkedIn API (use sparingly!)"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Get LinkedIn chats from Unipile, optionally enriched with attendee profile info.
@@ -217,7 +255,7 @@ async def get_linkedin_chats(
     Returns:
         List of chats with enriched attendee information and cache info
     """
-    unipile = UnipileService()
+    unipile = get_user_unipile_service(current_user, db)
     result = await unipile.get_chats(limit=limit, force_refresh=force_refresh)
 
     if not result.get("success") or not enrich:
@@ -282,7 +320,9 @@ async def get_chat_messages(
     chat_id: str,
     limit: int = Query(50, ge=1, le=100),
     force_refresh: bool = Query(False, description="Force refresh from LinkedIn API"),
-    analyze: bool = Query(False, description="Analyze conversation sentiment (only on new messages)")
+    analyze: bool = Query(False, description="Analyze conversation sentiment (only on new messages)"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Get messages from a specific LinkedIn chat.
@@ -299,7 +339,7 @@ async def get_chat_messages(
     Returns:
         List of messages with cache info and optional analysis
     """
-    unipile = UnipileService()
+    unipile = get_user_unipile_service(current_user, db)
     result = await unipile.get_chat_messages(chat_id, limit=limit, force_refresh=force_refresh)
 
     # Only analyze if requested AND there are new messages (to save API calls)
@@ -331,6 +371,7 @@ async def get_chat_messages(
 async def send_chat_message(
     chat_id: str,
     text: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -343,12 +384,15 @@ async def send_chat_message(
     Returns:
         Result of send operation
     """
-    unipile = UnipileService()
+    unipile = get_user_unipile_service(current_user, db)
     result = await unipile.send_message(chat_id, text)
 
-    # Update last_message_at for any lead associated with this chat
+    # Update last_message_at for any lead associated with this chat (owned by current user)
     if result["success"]:
-        lead = db.query(Lead).filter(Lead.linkedin_chat_id == chat_id).first()
+        lead = db.query(Lead).filter(
+            Lead.linkedin_chat_id == chat_id,
+            Lead.user_id == current_user.id
+        ).first()
         if lead:
             lead.last_message_at = datetime.utcnow()
             if lead.status == LeadStatus.CONNECTED.value:
@@ -359,7 +403,11 @@ async def send_chat_message(
 
 
 @router.get("/user/{provider_id}")
-async def get_linkedin_user(provider_id: str):
+async def get_linkedin_user(
+    provider_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
     Get LinkedIn user information.
 
@@ -369,7 +417,7 @@ async def get_linkedin_user(provider_id: str):
     Returns:
         User information from Unipile
     """
-    unipile = UnipileService()
+    unipile = get_user_unipile_service(current_user, db)
     result = await unipile.get_user_info(provider_id)
     return result
 
@@ -390,6 +438,7 @@ class AnalyzeConversationRequest(BaseModel):
 @router.post("/generate-reply")
 def generate_conversation_reply(
     request: GenerateReplyRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -401,8 +450,11 @@ def generate_conversation_reply(
     Returns:
         Generated reply message
     """
-    # Get default business profile for sender context
-    profile = db.query(BusinessProfile).filter(BusinessProfile.is_default == True).first()
+    # Get default business profile for sender context (for current user)
+    profile = db.query(BusinessProfile).filter(
+        BusinessProfile.is_default == True,
+        BusinessProfile.user_id == current_user.id
+    ).first()
 
     sender_context = None
     if profile:
@@ -433,7 +485,10 @@ def generate_conversation_reply(
 
 
 @router.post("/analyze-conversation")
-def analyze_conversation(request: AnalyzeConversationRequest):
+def analyze_conversation(
+    request: AnalyzeConversationRequest,
+    current_user: User = Depends(get_current_user)
+):
     """
     Analyze a conversation to determine engagement level (hot/warm/cold).
 
