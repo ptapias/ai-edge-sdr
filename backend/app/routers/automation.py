@@ -292,9 +292,16 @@ def get_invitation_stats(db: Session = Depends(get_db)):
     ).count()
     total_count = db.query(InvitationLog).filter(InvitationLog.success == True).count()
 
-    # Success rate
+    # Success rate (API calls)
     successful_count = db.query(InvitationLog).filter(InvitationLog.success == True).count()
     success_rate = (successful_count / total_count * 100) if total_count > 0 else 0
+
+    # Acceptance rate (actual LinkedIn acceptances)
+    # Count leads that have been sent invitations vs those who connected
+    sent_count = db.query(Lead).filter(Lead.status == "invitation_sent").count()
+    connected_count = db.query(Lead).filter(Lead.status == "connected").count()
+    total_invited = sent_count + connected_count
+    acceptance_rate = (connected_count / total_invited * 100) if total_invited > 0 else 0
 
     # Last 7 days breakdown
     by_day = []
@@ -322,6 +329,9 @@ def get_invitation_stats(db: Session = Depends(get_db)):
         this_month=month_count,
         total=total_count,
         success_rate=round(success_rate, 1),
+        acceptance_rate=round(acceptance_rate, 1),
+        pending_acceptance=sent_count,
+        accepted=connected_count,
         by_day=by_day
     )
 

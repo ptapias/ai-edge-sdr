@@ -93,5 +93,8 @@ class InvitationStatsResponse(BaseModel):
     this_week: int
     this_month: int
     total: int
-    success_rate: float
+    success_rate: float  # API success rate
+    acceptance_rate: float  # Actual LinkedIn acceptance rate
+    pending_acceptance: int  # Invitations waiting for acceptance
+    accepted: int  # Accepted connections
     by_day: List[dict]  # [{date: str, count: int, successful: int}]

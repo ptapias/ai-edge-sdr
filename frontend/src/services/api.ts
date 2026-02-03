@@ -346,6 +346,9 @@ export interface InvitationStats {
   this_month: number
   total: number
   success_rate: number
+  acceptance_rate: number
+  pending_acceptance: number
+  accepted: number
   by_day: Array<{ date: string; count: number; successful: number }>
 }
 

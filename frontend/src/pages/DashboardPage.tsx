@@ -231,16 +231,16 @@ export default function DashboardPage() {
             <p className="text-sm text-gray-500">Acceptance Rate</p>
             <TrendingUp className="w-4 h-4 text-gray-400" />
           </div>
-          <p className="text-2xl font-semibold text-green-600">{invitationStats?.success_rate ?? 0}%</p>
-          <p className="text-xs text-gray-500 mt-1">invitations accepted</p>
+          <p className="text-2xl font-semibold text-green-600">{invitationStats?.acceptance_rate ?? 0}%</p>
+          <p className="text-xs text-gray-500 mt-1">connections accepted</p>
           <div className="mt-3 flex items-center gap-4 text-sm">
             <span className="flex items-center text-green-600">
               <CheckCircle className="w-4 h-4 mr-1" />
-              {Math.round((invitationStats?.total ?? 0) * (invitationStats?.success_rate ?? 0) / 100)}
+              {invitationStats?.accepted ?? 0} accepted
             </span>
             <span className="flex items-center text-gray-400">
               <Clock className="w-4 h-4 mr-1" />
-              {invitationStats?.total ?? 0} total
+              {invitationStats?.pending_acceptance ?? 0} pending
             </span>
           </div>
         </div>

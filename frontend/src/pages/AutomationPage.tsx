@@ -516,9 +516,9 @@ export default function AutomationPage() {
           color="bg-green-500"
         />
         <StatCard
-          title="Send Success"
-          value={`${stats?.success_rate ?? 0}%`}
-          subtitle="API success rate"
+          title="Acceptance Rate"
+          value={`${stats?.acceptance_rate ?? 0}%`}
+          subtitle={`${stats?.accepted ?? 0} accepted / ${stats?.pending_acceptance ?? 0} pending`}
           icon={CheckCircle}
           color="bg-emerald-500"
         />
