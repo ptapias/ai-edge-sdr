@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .database import init_db
+from .services.scheduler_service import start_scheduler, stop_scheduler
 from .routers import (
     search_router,
     leads_router,
@@ -35,9 +36,17 @@ async def lifespan(app: FastAPI):
     logger.info("Starting LinkedIn AI SDR API...")
     init_db()
     logger.info("Database initialized")
+
+    # Start the automatic invitation scheduler
+    start_scheduler()
+    logger.info("Invitation scheduler started")
+
     yield
+
     # Shutdown
     logger.info("Shutting down LinkedIn AI SDR API...")
+    stop_scheduler()
+    logger.info("Invitation scheduler stopped")
 
 
 # Create FastAPI app

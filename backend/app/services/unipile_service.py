@@ -34,6 +34,11 @@ class UnipileService:
         """
         Extract LinkedIn provider ID (username/handle) from LinkedIn URL.
 
+        Handles multiple URL formats:
+        - Regular: linkedin.com/in/john-doe
+        - Sales Navigator: linkedin.com/sales/lead/ACwAAABxxxx,NAME_SEARCH,...
+        - Sales Navigator: linkedin.com/sales/people/ACwAAABxxxx,NAME_SEARCH,...
+
         Args:
             linkedin_url: LinkedIn profile URL
 
@@ -43,17 +48,36 @@ class UnipileService:
         if not linkedin_url:
             return None
 
-        # Pattern to match LinkedIn profile URLs
-        patterns = [
-            r'linkedin\.com/in/([^/?]+)',
-            r'linkedin\.com/sales/people/([^/?]+)',
-        ]
+        # Clean the URL
+        linkedin_url = linkedin_url.strip()
 
-        for pattern in patterns:
-            match = re.search(pattern, linkedin_url)
-            if match:
-                return match.group(1)
+        # Pattern 1: Regular LinkedIn profile URL
+        # Example: linkedin.com/in/john-doe-123456789
+        regular_match = re.search(r'linkedin\.com/in/([^/?]+)', linkedin_url)
+        if regular_match:
+            provider_id = regular_match.group(1).rstrip('/')
+            logger.debug(f"Extracted provider_id from regular URL: {provider_id}")
+            return provider_id
 
+        # Pattern 2: Sales Navigator URLs (lead or people)
+        # Example: linkedin.com/sales/lead/ACwAAABxxxx,NAME_SEARCH,xxxx
+        # Example: linkedin.com/sales/people/ACwAAABxxxx,NAME_SEARCH,xxxx
+        # We need to extract just the ID part before any comma
+        sales_match = re.search(r'linkedin\.com/sales/(?:lead|people)/([^,/?]+)', linkedin_url)
+        if sales_match:
+            provider_id = sales_match.group(1).rstrip('/')
+            logger.debug(f"Extracted provider_id from Sales Navigator URL: {provider_id}")
+            return provider_id
+
+        # Pattern 3: Try to find an AC-prefixed ID anywhere in the URL (fallback)
+        # These are LinkedIn's internal IDs: ACwAAAB...
+        ac_match = re.search(r'(AC[a-zA-Z0-9_-]{10,})', linkedin_url)
+        if ac_match:
+            provider_id = ac_match.group(1)
+            logger.debug(f"Extracted AC-prefixed provider_id: {provider_id}")
+            return provider_id
+
+        logger.warning(f"Could not extract provider_id from URL: {linkedin_url}")
         return None
 
     async def get_user_info(self, provider_id: str, force_refresh: bool = False) -> Dict[str, Any]:
@@ -180,6 +204,9 @@ class UnipileService:
         """
         Send LinkedIn connection invitation using profile URL.
 
+        First fetches user info to get the correct internal ID,
+        then sends the invitation using that ID.
+
         Args:
             linkedin_url: LinkedIn profile URL
             message: Connection message (max 300 chars)
@@ -190,12 +217,31 @@ class UnipileService:
         provider_id = self._extract_provider_id(linkedin_url)
 
         if not provider_id:
+            logger.error(f"Failed to extract provider_id from URL: {linkedin_url}")
             return {
                 "success": False,
                 "error": f"Could not extract provider ID from URL: {linkedin_url}"
             }
 
-        return await self.send_invitation(provider_id, message)
+        logger.info(f"Looking up user info for provider_id: {provider_id}")
+
+        # First, get user info to retrieve the correct internal ID
+        user_info = await self.get_user_info(provider_id)
+
+        if not user_info.get("success"):
+            logger.error(f"Failed to get user info for {provider_id}: {user_info.get('error')}")
+            return {
+                "success": False,
+                "error": f"Could not get user info: {user_info.get('error')}"
+            }
+
+        # Extract the correct ID from user info
+        # Unipile returns 'id' which is the internal identifier we need
+        user_data = user_info.get("data", {})
+        internal_id = user_data.get("id") or user_data.get("provider_id") or provider_id
+
+        logger.info(f"Sending invitation to internal_id: {internal_id} (original: {provider_id})")
+        return await self.send_invitation(internal_id, message)
 
     async def get_chats(self, limit: int = 50, force_refresh: bool = False) -> Dict[str, Any]:
         """

@@ -19,7 +19,8 @@ import {
   ChevronUp,
   MessageSquare,
   Target,
-  Filter
+  Filter,
+  Globe
 } from 'lucide-react'
 import {
   getAutomationSettings,
@@ -47,6 +48,56 @@ const DAYS = [
   { label: 'Sat', value: 32 },
   { label: 'Sun', value: 64 },
 ]
+
+// Common timezones
+const TIMEZONES = [
+  { value: 'Europe/Madrid', label: 'Madrid (GMT+1)' },
+  { value: 'Europe/London', label: 'London (GMT)' },
+  { value: 'Europe/Paris', label: 'Paris (GMT+1)' },
+  { value: 'Europe/Berlin', label: 'Berlin (GMT+1)' },
+  { value: 'Europe/Rome', label: 'Rome (GMT+1)' },
+  { value: 'Europe/Amsterdam', label: 'Amsterdam (GMT+1)' },
+  { value: 'Europe/Lisbon', label: 'Lisbon (GMT)' },
+  { value: 'America/New_York', label: 'New York (GMT-5)' },
+  { value: 'America/Los_Angeles', label: 'Los Angeles (GMT-8)' },
+  { value: 'America/Chicago', label: 'Chicago (GMT-6)' },
+  { value: 'America/Mexico_City', label: 'Mexico City (GMT-6)' },
+  { value: 'America/Sao_Paulo', label: 'São Paulo (GMT-3)' },
+  { value: 'America/Buenos_Aires', label: 'Buenos Aires (GMT-3)' },
+  { value: 'Asia/Tokyo', label: 'Tokyo (GMT+9)' },
+  { value: 'Asia/Shanghai', label: 'Shanghai (GMT+8)' },
+  { value: 'Asia/Singapore', label: 'Singapore (GMT+8)' },
+  { value: 'Asia/Dubai', label: 'Dubai (GMT+4)' },
+  { value: 'Australia/Sydney', label: 'Sydney (GMT+11)' },
+]
+
+// Generate hour options
+const HOURS = Array.from({ length: 24 }, (_, i) => ({
+  value: i,
+  label: i.toString().padStart(2, '0')
+}))
+
+// Generate minute options (15 min intervals)
+const MINUTES = [
+  { value: 0, label: '00' },
+  { value: 15, label: '15' },
+  { value: 30, label: '30' },
+  { value: 45, label: '45' },
+]
+
+// Detect user's timezone
+const detectTimezone = (): string => {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+    // Check if it's in our list
+    if (TIMEZONES.some(t => t.value === tz)) {
+      return tz
+    }
+    return 'Europe/Madrid' // Default fallback
+  } catch {
+    return 'Europe/Madrid'
+  }
+}
 
 function StatCard({ title, value, subtitle, icon: Icon, color }: {
   title: string
@@ -396,6 +447,23 @@ export default function AutomationPage() {
                       : `${status?.remaining_today} connections remaining today`}
               </p>
             </div>
+            {status?.current_time && (
+              <div className="ml-4 pl-4 border-l border-gray-300 text-sm text-gray-600">
+                <Clock className="w-4 h-4 inline mr-1" />
+                <span className="font-medium">{status.current_time}</span>
+                <span className="text-gray-400 text-xs ml-1">
+                  ({status.timezone?.split('/').pop()?.replace('_', ' ')})
+                </span>
+              </div>
+            )}
+            {status?.scheduler_running && (
+              <div className="ml-4 pl-4 border-l border-gray-300">
+                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                  <span className="w-2 h-2 bg-green-500 rounded-full mr-1.5 animate-pulse"></span>
+                  Auto-sending
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <button
@@ -448,8 +516,9 @@ export default function AutomationPage() {
           color="bg-green-500"
         />
         <StatCard
-          title="Acceptance Rate"
+          title="Send Success"
           value={`${stats?.success_rate ?? 0}%`}
+          subtitle="API success rate"
           icon={CheckCircle}
           color="bg-emerald-500"
         />
@@ -536,55 +605,89 @@ export default function AutomationPage() {
         </button>
 
         {showSettings && (
-          <div className="mt-4 space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Working Hours */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  <Clock className="w-4 h-4 inline mr-1" />
-                  Working Hours
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="0"
-                    max="23"
-                    value={localSettings.work_start_hour ?? settings?.work_start_hour ?? 9}
-                    onChange={(e) => updateLocalSetting('work_start_hour', parseInt(e.target.value))}
-                    className="input w-16"
-                  />
-                  <span>:</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="59"
-                    value={localSettings.work_start_minute ?? settings?.work_start_minute ?? 0}
-                    onChange={(e) => updateLocalSetting('work_start_minute', parseInt(e.target.value))}
-                    className="input w-16"
-                  />
-                  <span className="mx-2">to</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="23"
-                    value={localSettings.work_end_hour ?? settings?.work_end_hour ?? 18}
-                    onChange={(e) => updateLocalSetting('work_end_hour', parseInt(e.target.value))}
-                    className="input w-16"
-                  />
-                  <span>:</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="59"
-                    value={localSettings.work_end_minute ?? settings?.work_end_minute ?? 0}
-                    onChange={(e) => updateLocalSetting('work_end_minute', parseInt(e.target.value))}
-                    className="input w-16"
-                  />
+          <div className="mt-4 space-y-6">
+            {/* Timezone & Working Hours Row */}
+            <div className="bg-gray-50 rounded-lg p-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Timezone */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <Globe className="w-4 h-4 inline mr-1" />
+                    Timezone
+                  </label>
+                  <select
+                    value={localSettings.timezone ?? settings?.timezone ?? detectTimezone()}
+                    onChange={(e) => updateLocalSetting('timezone', e.target.value)}
+                    className="w-full px-3 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                  >
+                    {TIMEZONES.map((tz) => (
+                      <option key={tz.value} value={tz.value}>
+                        {tz.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Working Hours - Modern Time Picker */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <Clock className="w-4 h-4 inline mr-1" />
+                    Working Hours
+                  </label>
+                  <div className="flex items-center gap-2">
+                    {/* Start Time */}
+                    <div className="flex items-center bg-white border border-gray-200 rounded-lg overflow-hidden">
+                      <select
+                        value={localSettings.work_start_hour ?? settings?.work_start_hour ?? 9}
+                        onChange={(e) => updateLocalSetting('work_start_hour', parseInt(e.target.value))}
+                        className="px-3 py-2.5 bg-transparent border-0 text-gray-900 font-medium focus:ring-0 focus:outline-none appearance-none cursor-pointer"
+                      >
+                        {HOURS.map((h) => (
+                          <option key={h.value} value={h.value}>{h.label}</option>
+                        ))}
+                      </select>
+                      <span className="text-gray-400 font-medium">:</span>
+                      <select
+                        value={localSettings.work_start_minute ?? settings?.work_start_minute ?? 0}
+                        onChange={(e) => updateLocalSetting('work_start_minute', parseInt(e.target.value))}
+                        className="px-3 py-2.5 bg-transparent border-0 text-gray-900 font-medium focus:ring-0 focus:outline-none appearance-none cursor-pointer"
+                      >
+                        {MINUTES.map((m) => (
+                          <option key={m.value} value={m.value}>{m.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <span className="text-gray-400 font-medium px-2">→</span>
+
+                    {/* End Time */}
+                    <div className="flex items-center bg-white border border-gray-200 rounded-lg overflow-hidden">
+                      <select
+                        value={localSettings.work_end_hour ?? settings?.work_end_hour ?? 18}
+                        onChange={(e) => updateLocalSetting('work_end_hour', parseInt(e.target.value))}
+                        className="px-3 py-2.5 bg-transparent border-0 text-gray-900 font-medium focus:ring-0 focus:outline-none appearance-none cursor-pointer"
+                      >
+                        {HOURS.map((h) => (
+                          <option key={h.value} value={h.value}>{h.label}</option>
+                        ))}
+                      </select>
+                      <span className="text-gray-400 font-medium">:</span>
+                      <select
+                        value={localSettings.work_end_minute ?? settings?.work_end_minute ?? 0}
+                        onChange={(e) => updateLocalSetting('work_end_minute', parseInt(e.target.value))}
+                        className="px-3 py-2.5 bg-transparent border-0 text-gray-900 font-medium focus:ring-0 focus:outline-none appearance-none cursor-pointer"
+                      >
+                        {MINUTES.map((m) => (
+                          <option key={m.value} value={m.value}>{m.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Working Days */}
-              <div>
+              {/* Working Days - Same Row */}
+              <div className="mt-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   <Calendar className="w-4 h-4 inline mr-1" />
                   Working Days
@@ -594,10 +697,10 @@ export default function AutomationPage() {
                     <button
                       key={day.value}
                       onClick={() => toggleDay(day.value)}
-                      className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                      className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                         isDayEnabled(day.value)
-                          ? 'bg-blue-500 text-white'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          ? 'bg-blue-500 text-white shadow-sm'
+                          : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
                       }`}
                     >
                       {day.label}
@@ -605,63 +708,89 @@ export default function AutomationPage() {
                   ))}
                 </div>
               </div>
+            </div>
 
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {/* Daily Limit */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+              <div className="bg-white border border-gray-200 rounded-lg p-4">
+                <label className="block text-sm font-medium text-gray-700 mb-3">
                   Daily Connection Limit
                 </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="40"
-                  value={Math.min(localSettings.daily_limit ?? settings?.daily_limit ?? 40, 40)}
-                  onChange={(e) => updateLocalSetting('daily_limit', Math.min(parseInt(e.target.value) || 1, 40))}
-                  className="input w-24"
-                />
-                <p className="text-xs text-gray-500 mt-1">Maximum: 40 (LinkedIn limit)</p>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min="1"
+                    max="40"
+                    value={Math.min(localSettings.daily_limit ?? settings?.daily_limit ?? 40, 40)}
+                    onChange={(e) => updateLocalSetting('daily_limit', Math.min(parseInt(e.target.value) || 1, 40))}
+                    className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                  <span className="text-xl font-semibold text-gray-900 w-10 text-right">
+                    {Math.min(localSettings.daily_limit ?? settings?.daily_limit ?? 40, 40)}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">Maximum: 40 per day (LinkedIn limit)</p>
               </div>
 
               {/* Delay Settings */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Delay Between Invitations (seconds)
+              <div className="bg-white border border-gray-200 rounded-lg p-4">
+                <label className="block text-sm font-medium text-gray-700 mb-3">
+                  Delay Between Invitations
                 </label>
                 <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="30"
-                    max="3600"
+                  <select
                     value={localSettings.min_delay_seconds ?? settings?.min_delay_seconds ?? 60}
                     onChange={(e) => updateLocalSetting('min_delay_seconds', parseInt(e.target.value))}
-                    className="input w-24"
-                  />
-                  <span className="text-gray-500">to</span>
-                  <input
-                    type="number"
-                    min="60"
-                    max="7200"
+                    className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value={30}>30s</option>
+                    <option value={60}>1 min</option>
+                    <option value={120}>2 min</option>
+                    <option value={180}>3 min</option>
+                    <option value={300}>5 min</option>
+                  </select>
+                  <span className="text-gray-400">→</span>
+                  <select
                     value={localSettings.max_delay_seconds ?? settings?.max_delay_seconds ?? 300}
                     onChange={(e) => updateLocalSetting('max_delay_seconds', parseInt(e.target.value))}
-                    className="input w-24"
-                  />
+                    className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-lg text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value={60}>1 min</option>
+                    <option value={180}>3 min</option>
+                    <option value={300}>5 min</option>
+                    <option value={600}>10 min</option>
+                    <option value={900}>15 min</option>
+                  </select>
                 </div>
+                <p className="text-xs text-gray-500 mt-2">Random delay between each invitation</p>
               </div>
 
               {/* Minimum Score */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+              <div className="bg-white border border-gray-200 rounded-lg p-4">
+                <label className="block text-sm font-medium text-gray-700 mb-3">
                   Minimum Lead Score
                 </label>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={localSettings.min_lead_score ?? settings?.min_lead_score ?? 0}
-                  onChange={(e) => updateLocalSetting('min_lead_score', parseInt(e.target.value))}
-                  className="input w-24"
-                />
-                <p className="text-xs text-gray-500 mt-1">0 = no filter, 70+ = hot leads only</p>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="10"
+                    value={localSettings.min_lead_score ?? settings?.min_lead_score ?? 0}
+                    onChange={(e) => updateLocalSetting('min_lead_score', parseInt(e.target.value))}
+                    className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                  <span className="text-xl font-semibold text-gray-900 w-10 text-right">
+                    {localSettings.min_lead_score ?? settings?.min_lead_score ?? 0}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  {(localSettings.min_lead_score ?? settings?.min_lead_score ?? 0) === 0
+                    ? 'All leads'
+                    : (localSettings.min_lead_score ?? settings?.min_lead_score ?? 0) >= 70
+                      ? 'Hot leads only'
+                      : 'Warm & hot leads'}
+                </p>
               </div>
             </div>
 

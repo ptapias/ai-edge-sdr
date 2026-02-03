@@ -3,6 +3,7 @@ Automation settings model for automatic LinkedIn outreach.
 """
 import uuid
 from datetime import datetime, time
+from zoneinfo import ZoneInfo
 from sqlalchemy import Column, String, Integer, Boolean, DateTime, Time
 
 from ..database import Base
@@ -27,6 +28,10 @@ class AutomationSettings(Base):
     # Working days (bitmask: Mon=1, Tue=2, Wed=4, Thu=8, Fri=16, Sat=32, Sun=64)
     # Default: Monday-Friday = 1+2+4+8+16 = 31
     working_days = Column(Integer, default=31)
+
+    # Timezone for working hours (IANA timezone name)
+    # Default: Europe/Madrid (Spain)
+    timezone = Column(String(50), default="Europe/Madrid")
 
     # Invitation settings
     daily_limit = Column(Integer, default=40)  # Max 40 per day
@@ -57,9 +62,19 @@ class AutomationSettings(Base):
         return f"<AutomationSettings enabled={self.enabled} limit={self.daily_limit}>"
 
     def is_working_hour(self, current_time: datetime = None) -> bool:
-        """Check if current time is within working hours."""
+        """Check if current time is within working hours (in the configured timezone)."""
+        # Get the configured timezone
+        try:
+            tz = ZoneInfo(self.timezone or "Europe/Madrid")
+        except Exception:
+            tz = ZoneInfo("Europe/Madrid")
+
+        # Get current time in the configured timezone
         if current_time is None:
-            current_time = datetime.utcnow()
+            current_time = datetime.now(tz)
+        else:
+            # Convert to configured timezone if provided
+            current_time = current_time.astimezone(tz)
 
         # Check day of week (0=Monday, 6=Sunday)
         day_bit = 1 << current_time.weekday()

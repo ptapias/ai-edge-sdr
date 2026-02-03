@@ -313,6 +313,7 @@ export interface AutomationSettings {
   work_end_hour: number
   work_end_minute: number
   working_days: number
+  timezone: string
   daily_limit: number
   min_delay_seconds: number
   max_delay_seconds: number
@@ -334,6 +335,9 @@ export interface AutomationStatus {
   daily_limit: number
   remaining_today: number
   next_invitation_in_seconds: number | null
+  current_time: string | null
+  timezone: string | null
+  scheduler_running: boolean
 }
 
 export interface InvitationStats {

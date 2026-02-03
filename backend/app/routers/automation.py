@@ -5,6 +5,7 @@ import logging
 import random
 from typing import Optional, List
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from ..schemas.automation import (
 )
 from ..services.unipile_service import UnipileService
 from ..services.claude_service import ClaudeService
+from ..services.scheduler_service import is_scheduler_running
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/automation", tags=["automation"])
@@ -103,6 +105,13 @@ def get_automation_status(db: Session = Depends(get_db)):
         if elapsed < min_wait:
             next_in_seconds = int(min_wait - elapsed)
 
+    # Get current time in configured timezone
+    try:
+        tz = ZoneInfo(settings.timezone or "Europe/Madrid")
+        current_time = datetime.now(tz).strftime("%H:%M")
+    except Exception:
+        current_time = None
+
     return AutomationStatusResponse(
         enabled=settings.enabled,
         is_working_hour=settings.is_working_hour(),
@@ -110,7 +119,10 @@ def get_automation_status(db: Session = Depends(get_db)):
         invitations_sent_today=settings.invitations_sent_today,
         daily_limit=settings.daily_limit,
         remaining_today=max(0, settings.daily_limit - settings.invitations_sent_today),
-        next_invitation_in_seconds=next_in_seconds
+        next_invitation_in_seconds=next_in_seconds,
+        current_time=current_time,
+        timezone=settings.timezone,
+        scheduler_running=is_scheduler_running()
     )
 
 
@@ -265,11 +277,20 @@ def get_invitation_stats(db: Session = Depends(get_db)):
     week_start = today_start - timedelta(days=now.weekday())
     month_start = today_start.replace(day=1)
 
-    # Count queries
-    today_count = db.query(InvitationLog).filter(InvitationLog.sent_at >= today_start).count()
-    week_count = db.query(InvitationLog).filter(InvitationLog.sent_at >= week_start).count()
-    month_count = db.query(InvitationLog).filter(InvitationLog.sent_at >= month_start).count()
-    total_count = db.query(InvitationLog).count()
+    # Count queries - ONLY count successful invitations
+    today_count = db.query(InvitationLog).filter(
+        InvitationLog.sent_at >= today_start,
+        InvitationLog.success == True
+    ).count()
+    week_count = db.query(InvitationLog).filter(
+        InvitationLog.sent_at >= week_start,
+        InvitationLog.success == True
+    ).count()
+    month_count = db.query(InvitationLog).filter(
+        InvitationLog.sent_at >= month_start,
+        InvitationLog.success == True
+    ).count()
+    total_count = db.query(InvitationLog).filter(InvitationLog.success == True).count()
 
     # Success rate
     successful_count = db.query(InvitationLog).filter(InvitationLog.success == True).count()

@@ -14,6 +14,7 @@ class AutomationSettingsBase(BaseModel):
     work_end_hour: int = Field(18, ge=0, le=23)
     work_end_minute: int = Field(0, ge=0, le=59)
     working_days: int = Field(31, ge=0, le=127)  # Bitmask for days
+    timezone: str = Field("Europe/Madrid", description="IANA timezone name")
     daily_limit: int = Field(40, ge=1, le=100)
     min_delay_seconds: int = Field(60, ge=30, le=3600)
     max_delay_seconds: int = Field(300, ge=60, le=7200)
@@ -30,6 +31,7 @@ class AutomationSettingsUpdate(BaseModel):
     work_end_hour: Optional[int] = Field(None, ge=0, le=23)
     work_end_minute: Optional[int] = Field(None, ge=0, le=59)
     working_days: Optional[int] = Field(None, ge=0, le=127)
+    timezone: Optional[str] = None  # IANA timezone name
     daily_limit: Optional[int] = Field(None, ge=1, le=100)
     min_delay_seconds: Optional[int] = Field(None, ge=30, le=3600)
     max_delay_seconds: Optional[int] = Field(None, ge=60, le=7200)
@@ -60,6 +62,9 @@ class AutomationStatusResponse(BaseModel):
     daily_limit: int
     remaining_today: int
     next_invitation_in_seconds: Optional[int]
+    current_time: Optional[str] = None  # Current time in configured timezone
+    timezone: Optional[str] = None  # Configured timezone
+    scheduler_running: bool = False  # Background scheduler status
 
 
 class InvitationLogResponse(BaseModel):

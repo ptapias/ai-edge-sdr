@@ -1,0 +1,192 @@
+"""
+Background scheduler for automatic LinkedIn invitation sending.
+
+This service runs in the background and automatically sends invitations
+based on the automation settings (working hours, delays, limits, etc.)
+"""
+import asyncio
+import logging
+import random
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy.orm import Session
+
+from ..database import SessionLocal
+from ..models import Lead, AutomationSettings, InvitationLog, Campaign
+from ..models.lead import LeadStatus
+from .unipile_service import UnipileService
+
+logger = logging.getLogger(__name__)
+
+# Global flag to control the scheduler
+_scheduler_running = False
+_scheduler_task: Optional[asyncio.Task] = None
+
+
+async def send_automatic_invitation(db: Session) -> dict:
+    """
+    Send the next automatic invitation if conditions are met.
+
+    Returns:
+        dict with result information
+    """
+    settings = db.query(AutomationSettings).first()
+    if not settings:
+        return {"sent": False, "reason": "No settings found"}
+
+    # Reset daily counter if it's a new day
+    today = datetime.utcnow().date()
+    if settings.last_reset_date is None or settings.last_reset_date.date() < today:
+        settings.invitations_sent_today = 0
+        settings.last_reset_date = datetime.utcnow()
+        db.commit()
+
+    # Check if we can send
+    if not settings.enabled:
+        return {"sent": False, "reason": "Automation disabled"}
+
+    if not settings.is_working_hour():
+        return {"sent": False, "reason": "Outside working hours"}
+
+    if settings.invitations_sent_today >= settings.daily_limit:
+        return {"sent": False, "reason": "Daily limit reached"}
+
+    # Check minimum delay between invitations
+    if settings.last_invitation_at:
+        elapsed = (datetime.utcnow() - settings.last_invitation_at).total_seconds()
+        # Use random delay between min and max
+        required_delay = random.randint(settings.min_delay_seconds, settings.max_delay_seconds)
+        if elapsed < required_delay:
+            return {"sent": False, "reason": f"Waiting for delay ({int(required_delay - elapsed)}s remaining)"}
+
+    # Find next lead to contact
+    target_statuses = settings.target_statuses.split(",")
+    query = db.query(Lead).filter(
+        Lead.status.in_(target_statuses),
+        Lead.linkedin_url.isnot(None),
+        Lead.linkedin_message.isnot(None)
+    )
+
+    # Apply campaign filter if set
+    campaign_name = None
+    if settings.target_campaign_id:
+        query = query.filter(Lead.campaign_id == settings.target_campaign_id)
+        campaign = db.query(Campaign).filter(Campaign.id == settings.target_campaign_id).first()
+        campaign_name = campaign.name if campaign else None
+
+    # Apply score filter
+    if settings.min_lead_score > 0:
+        query = query.filter(Lead.score >= settings.min_lead_score)
+
+    # Get oldest lead first (FIFO)
+    lead = query.order_by(Lead.created_at).first()
+
+    if not lead:
+        return {"sent": False, "reason": "No eligible leads"}
+
+    # Send invitation via Unipile
+    unipile = UnipileService()
+    result = await unipile.send_invitation_by_url(lead.linkedin_url, lead.linkedin_message)
+
+    # Get campaign name for the log
+    if not campaign_name and lead.campaign_id:
+        campaign = db.query(Campaign).filter(Campaign.id == lead.campaign_id).first()
+        campaign_name = campaign.name if campaign else None
+
+    # Log the attempt
+    log = InvitationLog(
+        lead_id=lead.id,
+        lead_name=f"{lead.first_name} {lead.last_name}",
+        lead_company=lead.company_name,
+        lead_job_title=lead.job_title,
+        lead_linkedin_url=lead.linkedin_url,
+        message_preview=lead.linkedin_message[:300] if lead.linkedin_message else None,
+        campaign_id=lead.campaign_id,
+        campaign_name=campaign_name,
+        success=result.get("success", False),
+        error_message=result.get("error") if not result.get("success") else None,
+        mode="automatic"
+    )
+    db.add(log)
+
+    if result.get("success"):
+        # Update lead status
+        lead.status = LeadStatus.INVITATION_SENT.value
+        lead.connection_sent_at = datetime.utcnow()
+
+        # Update automation stats
+        settings.invitations_sent_today += 1
+        settings.last_invitation_at = datetime.utcnow()
+
+        logger.info(f"[Scheduler] Sent invitation to {lead.first_name} {lead.last_name}")
+    else:
+        logger.warning(f"[Scheduler] Failed to send to {lead.first_name} {lead.last_name}: {result.get('error')}")
+
+    db.commit()
+
+    return {
+        "sent": result.get("success", False),
+        "lead_name": f"{lead.first_name} {lead.last_name}",
+        "error": result.get("error") if not result.get("success") else None
+    }
+
+
+async def scheduler_loop():
+    """
+    Main scheduler loop that runs in the background.
+    Checks every 30 seconds if it should send an invitation.
+    """
+    global _scheduler_running
+
+    logger.info("[Scheduler] Starting automatic invitation scheduler")
+
+    while _scheduler_running:
+        try:
+            # Create a new database session for each iteration
+            db = SessionLocal()
+            try:
+                result = await send_automatic_invitation(db)
+                if result.get("sent"):
+                    logger.info(f"[Scheduler] Successfully sent: {result}")
+                elif result.get("reason") not in ["Automation disabled", "Outside working hours", "No eligible leads"]:
+                    # Only log non-routine reasons
+                    logger.debug(f"[Scheduler] Not sending: {result.get('reason')}")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"[Scheduler] Error in scheduler loop: {e}")
+
+        # Wait 30 seconds before next check
+        await asyncio.sleep(30)
+
+    logger.info("[Scheduler] Scheduler stopped")
+
+
+def start_scheduler():
+    """Start the background scheduler."""
+    global _scheduler_running, _scheduler_task
+
+    if _scheduler_running:
+        logger.warning("[Scheduler] Scheduler already running")
+        return
+
+    _scheduler_running = True
+    _scheduler_task = asyncio.create_task(scheduler_loop())
+    logger.info("[Scheduler] Scheduler started")
+
+
+def stop_scheduler():
+    """Stop the background scheduler."""
+    global _scheduler_running, _scheduler_task
+
+    _scheduler_running = False
+    if _scheduler_task:
+        _scheduler_task.cancel()
+        _scheduler_task = None
+    logger.info("[Scheduler] Scheduler stop requested")
+
+
+def is_scheduler_running() -> bool:
+    """Check if the scheduler is running."""
+    return _scheduler_running
