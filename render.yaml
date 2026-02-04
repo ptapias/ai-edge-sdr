@@ -40,3 +40,7 @@ services:
         value: "false"
       - key: APP_NAME
         value: "LinkedIn AI SDR"
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
