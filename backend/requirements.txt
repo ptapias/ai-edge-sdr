@@ -8,8 +8,9 @@ sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
 
 # Validation
-pydantic==2.5.3
+pydantic[email]==2.5.3
 pydantic-settings==2.1.0
+email-validator==2.1.0
 
 # HTTP client
 httpx==0.26.0
