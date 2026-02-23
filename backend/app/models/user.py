@@ -38,6 +38,7 @@ class User(Base):
     business_profiles = relationship("BusinessProfile", back_populates="user")
     automation_settings = relationship("AutomationSettings", back_populates="user", uselist=False)
     invitation_logs = relationship("InvitationLog", back_populates="user")
+    sequences = relationship("Sequence", back_populates="user")
 
     def __repr__(self):
         return f"<User {self.email}>"

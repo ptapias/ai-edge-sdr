@@ -702,3 +702,82 @@ Lead:
                 "reason": "Could not analyze lead data",
                 "suggested_action": "Review lead manually"
             }
+
+    def generate_sequence_follow_up(
+        self,
+        lead_data: Dict[str, Any],
+        sender_context: Optional[Dict[str, Any]] = None,
+        step_context: Optional[str] = None,
+        conversation_history: Optional[str] = None,
+        step_number: int = 2,
+        total_steps: int = 3,
+    ) -> str:
+        """
+        Generate a contextual follow-up message for a sequence step.
+
+        Args:
+            lead_data: Contact information
+            sender_context: Sender's business context
+            step_context: Optional guidance for this specific step
+            conversation_history: Previous messages in the conversation
+            step_number: Current step in the sequence (2+)
+            total_steps: Total steps in the sequence
+
+        Returns:
+            Generated follow-up message string
+        """
+        sender_name = sender_context.get("sender_name", "there") if sender_context else "there"
+        sender_role = sender_context.get("sender_role", "") if sender_context else ""
+        sender_company = sender_context.get("sender_company", "") if sender_context else ""
+        sender_extra = sender_context.get("sender_context", "") if sender_context else ""
+
+        contact_name = lead_data.get("first_name", "there")
+        contact_title = lead_data.get("job_title", "professional")
+        contact_company = lead_data.get("company_name", "your company")
+        contact_industry = lead_data.get("company_industry", "")
+
+        system_prompt = f"""You are {sender_name}, {sender_role} at {sender_company}.
+{sender_extra}
+
+You are writing follow-up message #{step_number} of {total_steps} in a LinkedIn outreach sequence to {contact_name}, {contact_title} at {contact_company}.
+
+RULES:
+- Keep it SHORT (2-4 sentences max, under 500 characters)
+- Reference the previous conversation naturally
+- Be genuinely interesting, NOT pushy or salesy
+- NO generic "just following up" or "checking in" openers
+- Each message should add NEW value or ask a specific question
+- Match the tone of the conversation so far
+- Sound human and natural, not robotic
+- Use the contact's first name
+
+{f'STEP GUIDANCE: {step_context}' if step_context else ''}
+
+{f'CONVERSATION SO FAR:{chr(10)}{conversation_history}' if conversation_history else ''}
+
+Output ONLY the message text, nothing else. No quotes, no labels."""
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=300,
+                system=system_prompt,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Write the follow-up message for {contact_name} ({contact_title} at {contact_company}, {contact_industry} industry)."
+                    }
+                ]
+            )
+
+            message = response.content[0].text.strip()
+            # Remove any wrapping quotes
+            if message.startswith('"') and message.endswith('"'):
+                message = message[1:-1]
+
+            logger.info(f"Generated sequence follow-up (step {step_number}/{total_steps}) for {contact_name}: {len(message)} chars")
+            return message
+
+        except Exception as e:
+            logger.error(f"Failed to generate sequence follow-up: {e}")
+            return f"Hi {contact_name}, wanted to follow up on our connection. Would love to hear your thoughts!"

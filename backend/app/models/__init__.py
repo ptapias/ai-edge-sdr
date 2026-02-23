@@ -6,6 +6,7 @@ from .lead import Lead
 from .campaign import Campaign
 from .business_profile import BusinessProfile
 from .automation import AutomationSettings, InvitationLog
+from .sequence import Sequence, SequenceStep, SequenceEnrollment
 
 __all__ = [
     "User",
@@ -14,5 +15,8 @@ __all__ = [
     "Campaign",
     "BusinessProfile",
     "AutomationSettings",
-    "InvitationLog"
+    "InvitationLog",
+    "Sequence",
+    "SequenceStep",
+    "SequenceEnrollment",
 ]

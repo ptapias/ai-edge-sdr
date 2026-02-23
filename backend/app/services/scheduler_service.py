@@ -135,23 +135,52 @@ async def send_automatic_invitation(db: Session) -> dict:
 async def scheduler_loop():
     """
     Main scheduler loop that runs in the background.
-    Checks every 30 seconds if it should send an invitation.
+    Multi-phase loop processing invitations and sequence steps.
+
+    Phase 1 (every tick / 30s): Send automatic invitations
+    Phase 2 (every tick / 30s): Process due sequence actions
+    Phase 3 (every 10 ticks / ~5min): Detect connection acceptances
+    Phase 4 (every 10 ticks / ~5min, offset): Detect replies
     """
     global _scheduler_running
+    from .sequence_scheduler import process_sequence_actions, detect_connection_changes, detect_replies
 
-    logger.info("[Scheduler] Starting automatic invitation scheduler")
+    logger.info("[Scheduler] Starting combined scheduler (invitations + sequences)")
 
+    tick_count = 0
     while _scheduler_running:
         try:
             # Create a new database session for each iteration
             db = SessionLocal()
             try:
+                # Phase 1: Process automatic invitations (existing behavior)
                 result = await send_automatic_invitation(db)
                 if result.get("sent"):
-                    logger.info(f"[Scheduler] Successfully sent: {result}")
+                    logger.info(f"[Scheduler] Successfully sent invitation: {result}")
                 elif result.get("reason") not in ["Automation disabled", "Outside working hours", "No eligible leads"]:
-                    # Only log non-routine reasons
                     logger.debug(f"[Scheduler] Not sending: {result.get('reason')}")
+
+                # Phase 2: Process sequence actions (connection requests + follow-ups)
+                try:
+                    await process_sequence_actions(db)
+                except Exception as e:
+                    logger.error(f"[Scheduler] Error in sequence actions: {e}")
+
+                # Phase 3: Detect connection acceptances (every ~5 min)
+                if tick_count % 10 == 0:
+                    try:
+                        await detect_connection_changes(db)
+                    except Exception as e:
+                        logger.error(f"[Scheduler] Error detecting connections: {e}")
+
+                # Phase 4: Detect replies (every ~5 min, offset from Phase 3)
+                if tick_count % 10 == 5:
+                    try:
+                        await detect_replies(db)
+                    except Exception as e:
+                        logger.error(f"[Scheduler] Error detecting replies: {e}")
+
+                tick_count += 1
             finally:
                 db.close()
         except Exception as e:

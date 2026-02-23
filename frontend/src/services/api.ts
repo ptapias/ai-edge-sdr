@@ -89,6 +89,7 @@ export interface Lead {
   email_message: string | null
   notes: string | null
   campaign_id: string | null
+  active_sequence_id: string | null
   connection_sent_at: string | null
   connected_at: string | null
   last_message_at: string | null
@@ -741,6 +742,198 @@ export const generateLinkedInMessageWithStrategy = async (
   if (businessId) params.append('business_id', businessId)
   params.append('strategy', strategy)
   const response = await api.post(`/leads/${leadId}/message/linkedin?${params}`)
+  return response.data
+}
+
+// === Sequences ===
+
+export interface SequenceStep {
+  id: string
+  step_order: number
+  step_type: 'connection_request' | 'follow_up_message'
+  delay_days: number
+  prompt_context: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Sequence {
+  id: string
+  name: string
+  description: string | null
+  status: 'draft' | 'active' | 'paused' | 'archived'
+  business_id: string | null
+  message_strategy: 'hybrid' | 'direct' | 'gradual'
+  total_enrolled: number
+  active_enrolled: number
+  completed_count: number
+  replied_count: number
+  steps: SequenceStep[]
+  user_id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SequenceListItem {
+  id: string
+  name: string
+  description: string | null
+  status: string
+  message_strategy: string
+  total_enrolled: number
+  active_enrolled: number
+  completed_count: number
+  replied_count: number
+  steps_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SequenceEnrollment {
+  id: string
+  sequence_id: string
+  lead_id: string
+  status: string
+  current_step_order: number
+  next_step_due_at: string | null
+  last_step_completed_at: string | null
+  replied_at: string | null
+  completed_at: string | null
+  failed_reason: string | null
+  enrolled_at: string
+  updated_at: string
+  lead_name: string | null
+  lead_company: string | null
+  lead_job_title: string | null
+  lead_status: string | null
+  lead_score_label: string | null
+}
+
+export interface SequenceStats {
+  sequence_id: string
+  sequence_name: string
+  total_enrolled: number
+  active: number
+  completed: number
+  replied: number
+  failed: number
+  paused: number
+  withdrawn: number
+  reply_rate: number
+  completion_rate: number
+  steps_breakdown: Array<{
+    step_order: number
+    step_type: string
+    reached: number
+    completed: number
+  }>
+}
+
+export interface SequenceDashboard {
+  total_sequences: number
+  active_sequences: number
+  total_enrolled: number
+  total_active: number
+  total_replied: number
+  total_completed: number
+  overall_reply_rate: number
+  sequences: SequenceListItem[]
+}
+
+export interface SequenceCreateData {
+  name: string
+  description?: string
+  business_id?: string
+  message_strategy?: string
+  steps?: Array<{
+    step_type: string
+    delay_days: number
+    prompt_context?: string
+  }>
+}
+
+// Sequence CRUD
+export const getSequences = async (status?: string): Promise<SequenceListItem[]> => {
+  const params = status ? `?status=${status}` : ''
+  const response = await api.get(`/sequences/${params}`)
+  return response.data
+}
+
+export const getSequenceDashboard = async (): Promise<SequenceDashboard> => {
+  const response = await api.get('/sequences/dashboard')
+  return response.data
+}
+
+export const createSequence = async (data: SequenceCreateData): Promise<Sequence> => {
+  const response = await api.post('/sequences/', data)
+  return response.data
+}
+
+export const getSequence = async (id: string): Promise<Sequence> => {
+  const response = await api.get(`/sequences/${id}`)
+  return response.data
+}
+
+export const updateSequence = async (id: string, data: Partial<SequenceCreateData>): Promise<Sequence> => {
+  const response = await api.put(`/sequences/${id}`, data)
+  return response.data
+}
+
+export const deleteSequence = async (id: string): Promise<void> => {
+  await api.delete(`/sequences/${id}`)
+}
+
+export const updateSequenceStatus = async (id: string, status: string): Promise<Sequence> => {
+  const response = await api.patch(`/sequences/${id}/status`, { status })
+  return response.data
+}
+
+// Step management
+export const addSequenceStep = async (
+  sequenceId: string,
+  step: { step_type: string; delay_days: number; prompt_context?: string }
+): Promise<SequenceStep> => {
+  const response = await api.post(`/sequences/${sequenceId}/steps`, step)
+  return response.data
+}
+
+export const updateSequenceStep = async (
+  sequenceId: string,
+  stepId: string,
+  data: Partial<{ step_type: string; delay_days: number; prompt_context: string }>
+): Promise<SequenceStep> => {
+  const response = await api.put(`/sequences/${sequenceId}/steps/${stepId}`, data)
+  return response.data
+}
+
+export const deleteSequenceStep = async (sequenceId: string, stepId: string): Promise<void> => {
+  await api.delete(`/sequences/${sequenceId}/steps/${stepId}`)
+}
+
+export const reorderSequenceSteps = async (sequenceId: string, stepIds: string[]): Promise<void> => {
+  await api.put(`/sequences/${sequenceId}/steps/reorder`, { step_ids: stepIds })
+}
+
+// Enrollment
+export const enrollLeads = async (sequenceId: string, leadIds: string[]) => {
+  const response = await api.post(`/sequences/${sequenceId}/enroll`, { lead_ids: leadIds })
+  return response.data
+}
+
+export const unenrollLeads = async (sequenceId: string, leadIds: string[]) => {
+  const response = await api.post(`/sequences/${sequenceId}/unenroll`, { lead_ids: leadIds })
+  return response.data
+}
+
+export const getEnrollments = async (sequenceId: string, status?: string): Promise<SequenceEnrollment[]> => {
+  const params = status ? `?status=${status}` : ''
+  const response = await api.get(`/sequences/${sequenceId}/enrollments${params}`)
+  return response.data
+}
+
+// Stats
+export const getSequenceStats = async (sequenceId: string): Promise<SequenceStats> => {
+  const response = await api.get(`/sequences/${sequenceId}/stats`)
   return response.data
 }
 

@@ -114,9 +114,15 @@ class Lead(Base):
     ai_recommendation_reason = Column(Text, nullable=True)
     priority_score = Column(Integer, nullable=True)  # Computed 0-100
 
+    # Sequence tracking
+    active_sequence_id = Column(String(36), nullable=True)  # Currently enrolled sequence
+
     # Campaign relationship
     campaign_id = Column(String(36), ForeignKey("campaigns.id"), nullable=True)
     campaign = relationship("Campaign", back_populates="leads")
+
+    # Sequence enrollments
+    sequence_enrollments = relationship("SequenceEnrollment", back_populates="lead")
 
     # User relationship (multi-tenancy)
     user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)

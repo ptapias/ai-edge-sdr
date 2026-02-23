@@ -15,7 +15,8 @@ import {
   Flame,
   Thermometer,
   Snowflake,
-  AlertTriangle
+  AlertTriangle,
+  GitBranch
 } from 'lucide-react'
 import {
   getLinkedInChats,
@@ -508,7 +509,8 @@ export default function InboxPage() {
                     key={chat.id}
                     onClick={() => setSelectedChat(chat)}
                     className={`w-full p-4 text-left border-b hover:bg-gray-50 transition-colors ${
-                      isSelected ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''
+                      isSelected ? 'bg-blue-50 border-l-2 border-l-blue-500' :
+                      lead?.status === 'in_conversation' ? 'border-l-2 border-l-orange-400 bg-orange-50/30' : ''
                     }`}
                   >
                     <div className="flex items-start gap-3">
@@ -545,6 +547,26 @@ export default function InboxPage() {
                             <Building2 className="w-3 h-3 mr-1" />
                             {lead.company_name}
                           </p>
+                        )}
+                        {/* Sequence badge */}
+                        {lead?.active_sequence_id && (
+                          <p className="text-xs text-purple-600 truncate flex items-center mt-0.5">
+                            <GitBranch className="w-3 h-3 mr-1" />
+                            In sequence
+                          </p>
+                        )}
+                        {/* Score/temperature indicator */}
+                        {lead?.score_label && (
+                          <span className={`inline-flex items-center gap-1 mt-0.5 text-xs font-medium ${
+                            lead.score_label === 'hot' ? 'text-red-600' :
+                            lead.score_label === 'warm' ? 'text-orange-600' :
+                            'text-blue-600'
+                          }`}>
+                            {lead.score_label === 'hot' ? <Flame className="w-3 h-3" /> :
+                             lead.score_label === 'warm' ? <Thermometer className="w-3 h-3" /> :
+                             <Snowflake className="w-3 h-3" />}
+                            {lead.score_label}
+                          </span>
                         )}
                         {getChatTimestamp(chat) && (
                           <p className="text-xs text-gray-400 mt-1 flex items-center">
@@ -596,6 +618,28 @@ export default function InboxPage() {
 
                 {/* Conversation Analysis + Lead Intelligence */}
                 <div className="flex items-center gap-3">
+                  {/* Sequence badge in header */}
+                  {(() => {
+                    const lead = selectedChat ? findLeadForChat(selectedChat) : undefined
+                    if (lead?.active_sequence_id) {
+                      return (
+                        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-purple-50 border border-purple-200">
+                          <GitBranch className="w-3.5 h-3.5 text-purple-600" />
+                          <span className="text-xs font-medium text-purple-700">In Sequence</span>
+                        </div>
+                      )
+                    }
+                    if (lead?.status === 'in_conversation') {
+                      return (
+                        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-orange-50 border border-orange-200">
+                          <MessageSquare className="w-3.5 h-3.5 text-orange-600" />
+                          <span className="text-xs font-medium text-orange-700">Replied</span>
+                        </div>
+                      )
+                    }
+                    return null
+                  })()}
+
                   {/* Show lead intelligence if available */}
                   {(() => {
                     const lead = selectedChat ? findLeadForChat(selectedChat) : undefined
