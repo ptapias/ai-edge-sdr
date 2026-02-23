@@ -2,15 +2,28 @@ import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Upload, FileText, CheckCircle, AlertCircle, Loader2, ArrowRight, ArrowLeft, X } from 'lucide-react'
 import Papa from 'papaparse'
+import * as XLSX from 'xlsx'
 import { previewCSVImport, executeCSVImport, type CSVPreviewResponse, type CSVImportResponse } from '../services/api'
 
 type Step = 'upload' | 'preview' | 'result'
+
+const ALLOWED_EXTENSIONS = ['.csv', '.xlsx', '.xls']
 
 const STATUS_LABELS: Record<string, string> = {
   new: 'New',
   invitation_sent: 'Invitation Sent',
   connected: 'Connected',
   in_conversation: 'In Conversation',
+}
+
+function isAllowedFile(filename: string): boolean {
+  const lower = filename.toLowerCase()
+  return ALLOWED_EXTENSIONS.some(ext => lower.endsWith(ext))
+}
+
+function isExcelFile(filename: string): boolean {
+  const lower = filename.toLowerCase()
+  return lower.endsWith('.xlsx') || lower.endsWith('.xls')
 }
 
 export default function ImportPage() {
@@ -31,31 +44,60 @@ export default function ImportPage() {
     setIsLoading(true)
 
     try {
-      // Parse CSV client-side
-      Papa.parse(selectedFile, {
-        header: true,
-        skipEmptyLines: true,
-        complete: async (results) => {
-          setParsedRows(results.data as Record<string, unknown>[])
-          setCampaignName(`CSV Import - ${new Date().toLocaleDateString()}`)
+      if (isExcelFile(selectedFile.name)) {
+        // ── Excel file: parse with SheetJS ──
+        const data = await selectedFile.arrayBuffer()
+        const workbook = XLSX.read(data, { type: 'array' })
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]]
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: '' }) as Record<string, unknown>[]
+        setParsedRows(jsonData)
+        setCampaignName(`Import - ${new Date().toLocaleDateString()}`)
 
-          // Get server preview (duplicate detection)
-          try {
-            const previewData = await previewCSVImport(selectedFile)
-            setPreview(previewData)
-            setStep('preview')
-          } catch (err: unknown) {
-            const errorMsg = err instanceof Error ? err.message : 'Failed to preview CSV'
-            setError(errorMsg)
-          } finally {
-            setIsLoading(false)
-          }
-        },
-        error: (err) => {
-          setError(`CSV parse error: ${err.message}`)
+        // Convert to CSV for backend preview (backend expects a file upload)
+        const csvContent = XLSX.utils.sheet_to_csv(worksheet)
+        const csvBlob = new Blob([csvContent], { type: 'text/csv' })
+        const csvFile = new File(
+          [csvBlob],
+          selectedFile.name.replace(/\.xlsx?$/i, '.csv'),
+          { type: 'text/csv' }
+        )
+
+        try {
+          const previewData = await previewCSVImport(csvFile)
+          setPreview(previewData)
+          setStep('preview')
+        } catch (err: unknown) {
+          const errorMsg = err instanceof Error ? err.message : 'Failed to preview file'
+          setError(errorMsg)
+        } finally {
           setIsLoading(false)
         }
-      })
+      } else {
+        // ── CSV file: parse with PapaParse ──
+        Papa.parse(selectedFile, {
+          header: true,
+          skipEmptyLines: true,
+          complete: async (results) => {
+            setParsedRows(results.data as Record<string, unknown>[])
+            setCampaignName(`Import - ${new Date().toLocaleDateString()}`)
+
+            try {
+              const previewData = await previewCSVImport(selectedFile)
+              setPreview(previewData)
+              setStep('preview')
+            } catch (err: unknown) {
+              const errorMsg = err instanceof Error ? err.message : 'Failed to preview file'
+              setError(errorMsg)
+            } finally {
+              setIsLoading(false)
+            }
+          },
+          error: (err) => {
+            setError(`File parse error: ${err.message}`)
+            setIsLoading(false)
+          }
+        })
+      }
     } catch {
       setError('Failed to read file')
       setIsLoading(false)
@@ -66,10 +108,10 @@ export default function ImportPage() {
     e.preventDefault()
     setDragActive(false)
     const droppedFile = e.dataTransfer.files[0]
-    if (droppedFile?.name.endsWith('.csv')) {
+    if (droppedFile && isAllowedFile(droppedFile.name)) {
       handleFile(droppedFile)
     } else {
-      setError('Please drop a CSV file')
+      setError('Please drop a CSV or Excel file (.csv, .xlsx, .xls)')
     }
   }, [handleFile])
 
@@ -98,8 +140,8 @@ export default function ImportPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Import Leads from CSV</h1>
-        <p className="text-gray-500 mt-1">Upload a CSV file to import leads into a new campaign</p>
+        <h1 className="text-2xl font-bold text-gray-900">Import Leads</h1>
+        <p className="text-gray-500 mt-1">Upload a CSV or Excel file to import leads into a new campaign</p>
       </div>
 
       {/* Steps indicator */}
@@ -149,21 +191,21 @@ export default function ImportPage() {
             {isLoading ? (
               <>
                 <Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" />
-                <p className="text-gray-600">Processing CSV file...</p>
+                <p className="text-gray-600">Processing file...</p>
               </>
             ) : (
               <>
                 <Upload className="w-12 h-12 text-gray-400 mb-4" />
                 <p className="text-lg font-medium text-gray-900 mb-2">
-                  Drag & drop your CSV file here
+                  Drag & drop your file here
                 </p>
-                <p className="text-gray-500 mb-4">or click to browse</p>
+                <p className="text-gray-500 mb-4">Supports CSV, Excel (.xlsx, .xls)</p>
                 <label className="btn btn-primary cursor-pointer">
                   <FileText className="w-4 h-4 mr-2" />
-                  Choose CSV File
+                  Choose File
                   <input
                     type="file"
-                    accept=".csv"
+                    accept=".csv,.xlsx,.xls"
                     className="hidden"
                     onChange={(e) => {
                       const f = e.target.files?.[0]
@@ -353,7 +395,7 @@ export default function ImportPage() {
               className="btn btn-secondary"
               onClick={() => { setStep('upload'); setFile(null); setPreview(null); setResult(null) }}
             >
-              Import Another CSV
+              Import Another File
             </button>
           </div>
         </div>
