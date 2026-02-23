@@ -64,7 +64,7 @@ function formatRelative(dateString: string | null | undefined) {
   return formatDate(dateString)
 }
 
-export default function EnrollmentTable({ sequenceId, isActive }: EnrollmentTableProps) {
+export default function EnrollmentTable({ sequenceId }: EnrollmentTableProps) {
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState('')
   const [selectedEnrollments, setSelectedEnrollments] = useState<Set<string>>(new Set())

@@ -23,7 +23,7 @@ import {
   updateSequenceStatus,
   getBusinessProfiles,
 } from '../services/api'
-import type { SequenceListItem, Sequence, BusinessProfile, SequenceCreateData } from '../services/api'
+import type { SequenceListItem, BusinessProfile, SequenceCreateData } from '../services/api'
 import SequenceBuilder from '../components/sequences/SequenceBuilder'
 import EnrollLeadsModal from '../components/sequences/EnrollLeadsModal'
 import EnrollmentTable from '../components/sequences/EnrollmentTable'

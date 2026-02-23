@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { X, Search, Users, Loader2, CheckCircle } from 'lucide-react'
+import { X, Users, Loader2, CheckCircle } from 'lucide-react'
 import { getLeads, getCampaigns, enrollLeads } from '../../services/api'
 import type { Lead } from '../../services/api'
 

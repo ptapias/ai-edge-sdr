@@ -10,7 +10,6 @@ import {
   MessageSquare
 } from 'lucide-react'
 import { getSequenceStats } from '../../services/api'
-import type { SequenceStats as SequenceStatsType } from '../../services/api'
 
 interface SequenceStatsProps {
   sequenceId: string
