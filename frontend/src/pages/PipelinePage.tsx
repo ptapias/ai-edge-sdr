@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
   Loader2, MessageSquare, Flame, Thermometer, Snowflake, Clock, X, ExternalLink,
-  ArrowRight, User
+  User
 } from 'lucide-react'
 import {
   getPipelineLeads,

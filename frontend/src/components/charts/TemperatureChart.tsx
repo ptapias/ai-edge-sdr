@@ -55,7 +55,7 @@ export default function TemperatureChart({ distribution }: { distribution: Tempe
           ))}
         </Pie>
         <Tooltip
-          formatter={(value: number) => [value, 'Leads']}
+          formatter={(value: number | undefined) => [value ?? 0, 'Leads']}
           contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
         />
         <Legend

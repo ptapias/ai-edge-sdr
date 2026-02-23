@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Target, Flame, Thermometer, Snowflake, MessageSquare, ArrowRight, Loader2 } from 'lucide-react'
-import { getFocusLeads, type FocusLead } from '../services/api'
+import { getFocusLeads } from '../services/api'
 
 function PriorityBadge({ score }: { score: number }) {
   const config = score >= 70

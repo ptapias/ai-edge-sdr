@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
-  Users, Mail, Flame, Send, Folder, Building2, AlertTriangle, Plus, ArrowRight, Search,
+  Users, Mail, Flame, Send, Folder, AlertTriangle, Plus, ArrowRight, Search,
   TrendingUp, Clock, CheckCircle, Calendar, Zap, Upload, MessageSquare, Target, LayoutGrid
 } from 'lucide-react'
 import {
@@ -119,7 +119,6 @@ export default function DashboardPage() {
     queryFn: getCampaignAnalytics,
   })
 
-  const defaultProfile = profiles?.find(p => p.is_default)
   const hasNoProfile = !profiles || profiles.length === 0
 
   if (statsLoading) {

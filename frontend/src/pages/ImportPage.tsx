@@ -16,7 +16,7 @@ const STATUS_LABELS: Record<string, string> = {
 export default function ImportPage() {
   const navigate = useNavigate()
   const [step, setStep] = useState<Step>('upload')
-  const [file, setFile] = useState<File | null>(null)
+  const [, setFile] = useState<File | null>(null)
   const [parsedRows, setParsedRows] = useState<Record<string, unknown>[]>([])
   const [preview, setPreview] = useState<CSVPreviewResponse | null>(null)
   const [result, setResult] = useState<CSVImportResponse | null>(null)
