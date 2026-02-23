@@ -65,6 +65,55 @@ def list_leads(
     )
 
 
+@router.get("/pipeline")
+def get_pipeline_leads(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get leads grouped by status for pipeline/kanban view."""
+    leads = (
+        db.query(Lead)
+        .filter(Lead.user_id == current_user.id)
+        .order_by(desc(Lead.updated_at))
+        .all()
+    )
+
+    pipeline = {}
+    for lead in leads:
+        status = lead.status
+        if status not in pipeline:
+            pipeline[status] = []
+
+        has_conversation = lead.linkedin_chat_id is not None
+        if has_conversation:
+            response_status = "responded"
+        elif lead.connection_sent_at:
+            response_status = "awaiting"
+        else:
+            response_status = "no_contact"
+
+        pipeline[status].append({
+            "id": lead.id,
+            "first_name": lead.first_name,
+            "last_name": lead.last_name,
+            "full_name": lead.full_name or f"{lead.first_name or ''} {lead.last_name or ''}".strip(),
+            "job_title": lead.job_title,
+            "company_name": lead.company_name,
+            "score": lead.score,
+            "score_label": lead.score_label,
+            "has_conversation": has_conversation,
+            "linkedin_chat_id": lead.linkedin_chat_id,
+            "response_status": response_status,
+            "sentiment_level": lead.sentiment_level if hasattr(lead, 'sentiment_level') else None,
+            "last_activity": (
+                lead.last_message_at or lead.connected_at or lead.connection_sent_at or lead.updated_at
+            ).isoformat() if (lead.last_message_at or lead.connected_at or lead.connection_sent_at or lead.updated_at) else None,
+            "updated_at": lead.updated_at.isoformat() if lead.updated_at else None,
+        })
+
+    return {"pipeline": pipeline}
+
+
 # NOTE: This route MUST come BEFORE /{lead_id} to avoid "statuses" being interpreted as a lead_id
 @router.get("/statuses", response_model=List[LeadStatusInfo])
 def get_available_statuses():
@@ -320,6 +369,7 @@ def qualify_leads(
 def generate_linkedin_message(
     lead_id: str,
     business_id: Optional[str] = None,
+    strategy: str = Query("hybrid", description="Message strategy: hybrid, direct, gradual"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -351,11 +401,14 @@ def generate_linkedin_message(
     lead_data = {
         "first_name": lead.first_name,
         "job_title": lead.job_title,
+        "headline": lead.headline,
         "company_name": lead.company_name,
         "company_industry": lead.company_industry,
+        "company_website": lead.company_website,
+        "company_size": lead.company_size,
     }
 
-    message = claude_service.generate_linkedin_message(lead_data, sender_context)
+    message = claude_service.generate_linkedin_message(lead_data, sender_context, strategy=strategy)
 
     lead.linkedin_message = message
     db.commit()
@@ -363,7 +416,8 @@ def generate_linkedin_message(
     return {
         "lead_id": lead_id,
         "message": message,
-        "length": len(message)
+        "length": len(message),
+        "strategy": strategy,
     }
 
 

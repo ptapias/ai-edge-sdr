@@ -192,42 +192,85 @@ Business Context:
     def generate_linkedin_message(
         self,
         lead_data: Dict[str, Any],
-        sender_context: Optional[Dict[str, Any]] = None
+        sender_context: Optional[Dict[str, Any]] = None,
+        strategy: str = "hybrid"
     ) -> str:
         """
         Generate a personalized LinkedIn connection message.
 
+        Strategies:
+        - "hybrid": Auto-detect based on seniority (direct for seniors, gradual for others)
+        - "direct": Mention AI Edge newsletter sponsorship directly
+        - "gradual": Build rapport first, no pitch
+
         Args:
             lead_data: Lead information
             sender_context: Sender's business context
+            strategy: "hybrid", "direct", or "gradual"
 
         Returns:
             Connection message (max 300 characters)
         """
         context = sender_context or {}
 
-        system_prompt = """You are a LinkedIn connection request writer. Write brief, honest messages that show genuine curiosity.
+        # Determine effective strategy for hybrid mode
+        effective_strategy = strategy
+        if strategy == "hybrid":
+            job_title = (lead_data.get("job_title", "") or "").lower()
+            headline = (lead_data.get("headline", "") or "").lower()
+            combined = f"{job_title} {headline}"
+
+            senior_keywords = [
+                "director", "vp", "vice president", "founder", "co-founder",
+                "cmo", "ceo", "cto", "coo", "chief", "head of", "svp",
+                "senior vice", "managing director", "partner", "owner",
+                "president", "head of growth", "head of marketing",
+            ]
+            effective_strategy = "direct" if any(kw in combined for kw in senior_keywords) else "gradual"
+
+        if effective_strategy == "direct":
+            system_prompt = """You are a LinkedIn outreach specialist for AI Edge, a newsletter with 30,000+ subscribers (entrepreneurs, founders, tech professionals building with AI). You write connection requests to sell newsletter sponsorship packages.
 
 RULES:
 - MAXIMUM 300 characters (hard limit)
-- Direct and honest tone
-- Show genuine interest in their work
+- Mention AI Edge newsletter and its audience briefly
+- Reference their specific role/company/industry and why it's a fit
+- Single clear value prop: reach AI-focused decision-makers
+- Direct, honest, no fluff
+- NO flattery, NO superlatives, NO buzzwords
+
+CONTEXT:
+- Newsletter: AI Edge (EN) / IA al Dia (ES) - 30K+ subscribers
+- Audience: entrepreneurs, founders, tech professionals building with AI
+- 43%+ open rate, proven results
+- Packages range $200-$1,250/issue
+- You're offering competitive introductory pricing
+
+Output ONLY the message, nothing else."""
+        else:
+            system_prompt = """You are a LinkedIn connection request writer. Write brief, honest messages that show genuine curiosity about the person's work in AI/tech.
+
+RULES:
+- MAXIMUM 300 characters (hard limit)
+- Connect based on shared interest in AI/tech
+- Reference their specific work, role, or company
+- Show genuine curiosity about what they're building
+- DO NOT mention newsletters, sponsorships, or selling anything
 - NO flattery or ass-kissing
 - NO superlatives or excessive praise
-- NO mentions of "collaboration" or "opportunity"
 
 GOOD phrases:
-- "Curious about..."
-- "Interested in learning..."
+- "Curious about how you're using AI at..."
 - "Noticed you're building..."
-- "Following your work on..."
+- "Interested in your approach to..."
+- "Your work on [specific thing] caught my eye"
 
 BAD phrases (never use):
 - "Impressed by your work"
 - "Amazing profile"
-- "Great insights"
 - "Love your content"
 - "Excited to connect"
+- "collaboration" or "opportunity"
 
 Output ONLY the message, nothing else."""
 
@@ -236,14 +279,17 @@ Output ONLY the message, nothing else."""
 Contact:
 - Name: {lead_data.get('first_name', '')}
 - Job Title: {lead_data.get('job_title', '')}
+- Headline: {lead_data.get('headline', '')}
 - Company: {lead_data.get('company_name', '')}
+- Company Website: {lead_data.get('company_website', '')}
 - Industry: {lead_data.get('company_industry', '')}
+- Company Size: {lead_data.get('company_size', '')}
 
 Sender Context:
-- Name: {context.get('sender_name', 'there')}
-- Role: {context.get('sender_role', '')}
-- Company: {context.get('sender_company', '')}
-- Context: {context.get('sender_context', '')}"""
+- Name: {context.get('sender_name', 'Pablo')}
+- Role: {context.get('sender_role', 'Founder')}
+- Company: {context.get('sender_company', 'AI Edge Newsletter')}
+- Context: {context.get('sender_context', 'AI newsletter with 30K+ subscribers')}"""
 
         message = self.client.messages.create(
             model=self.model,
@@ -493,4 +539,166 @@ Determine engagement level:"""
                 "level": "warm",
                 "reason": "Could not analyze conversation",
                 "next_action": "Continue engagement"
+            }
+
+    def detect_buying_signals(
+        self,
+        conversation_text: str
+    ) -> Dict[str, Any]:
+        """
+        Detect buying signals in a conversation.
+
+        Args:
+            conversation_text: Formatted conversation text
+
+        Returns:
+            Dictionary with signals, signal_strength, sentiment, summary
+        """
+        system_prompt = """You are a sales intelligence analyst. Analyze LinkedIn conversations to detect buying signals for newsletter sponsorship sales.
+
+CONTEXT: We sell sponsorship packages for AI Edge newsletter (30K+ subscribers, 43%+ open rate).
+Packages: Featured Tool ($200), Tutorial Sponsor ($275), Spotlight ($325), Primary ($1,250).
+
+OUTPUT JSON:
+{
+  "signals": ["list of specific buying signals detected"],
+  "signal_strength": "strong" | "moderate" | "weak" | "none",
+  "sentiment": "hot" | "warm" | "cold",
+  "summary": "1-2 sentence summary of buyer intent"
+}
+
+BUYING SIGNALS (strong):
+- Asking about pricing, packages, or availability
+- Requesting media kit or audience demographics
+- Mentioning budget or marketing spend
+- Proposing a call or meeting to discuss
+- Asking about case studies or results
+
+BUYING SIGNALS (moderate):
+- Showing interest in the newsletter/audience
+- Asking about content types or formats
+- Mentioning their marketing goals
+- Engaging with multiple questions
+
+BUYING SIGNALS (weak):
+- General positive responses
+- Asking general questions about AI
+- Polite but non-committal engagement
+
+Be specific about which signals you detect."""
+
+        user_content = f"""Analyze this conversation for buying signals:
+
+{conversation_text}"""
+
+        try:
+            message = self.client.messages.create(
+                model=self.model,
+                max_tokens=300,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_content}]
+            )
+
+            response_text = message.content[0].text
+
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "```" in response_text:
+                json_str = response_text.split("```")[1].split("```")[0]
+            else:
+                json_str = response_text
+
+            return json.loads(json_str.strip())
+
+        except Exception as e:
+            logger.error(f"Failed to detect buying signals: {e}")
+            return {
+                "signals": [],
+                "signal_strength": "none",
+                "sentiment": "warm",
+                "summary": "Could not analyze conversation"
+            }
+
+    def recommend_stage_transition(
+        self,
+        lead_data: Dict[str, Any],
+        conversation_text: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get AI recommendation for lead stage transition.
+
+        Args:
+            lead_data: Lead information including current stage
+            conversation_text: Optional conversation text for context
+
+        Returns:
+            Dictionary with should_advance, recommended_stage, reason, suggested_action
+        """
+        system_prompt = """You are a sales pipeline advisor. Based on lead data and conversation history, recommend whether to advance a lead to a new stage.
+
+PIPELINE STAGES (in order):
+1. new - No contact made
+2. pending - Awaiting invitation
+3. invitation_sent - LinkedIn invite sent
+4. connected - Connected on LinkedIn
+5. in_conversation - Active discussion
+6. meeting_scheduled - Meeting set up
+7. qualified - Ready to close
+8. closed_won - Deal done
+9. disqualified - Not a fit
+10. closed_lost - Deal lost
+
+OUTPUT JSON:
+{
+  "should_advance": true/false,
+  "recommended_stage": "stage_value",
+  "reason": "1-2 sentence explanation",
+  "suggested_action": "Specific next step to take"
+}
+
+Be practical and conservative - only recommend advancing when there's clear evidence."""
+
+        conversation_section = ""
+        if conversation_text:
+            conversation_section = f"\nConversation:\n{conversation_text}"
+
+        user_content = f"""Evaluate this lead for stage transition:
+
+Lead:
+- Name: {lead_data.get('name', 'Unknown')}
+- Title: {lead_data.get('job_title', 'Unknown')}
+- Company: {lead_data.get('company', 'Unknown')}
+- Current Stage: {lead_data.get('current_stage', 'new')}
+- AI Score: {lead_data.get('score', 'N/A')} ({lead_data.get('score_label', 'unscored')})
+- Has Conversation: {lead_data.get('has_conversation', False)}
+- Connected: {lead_data.get('connected', False)}
+- Invitation Sent: {lead_data.get('invitation_sent', False)}
+{conversation_section}"""
+
+        try:
+            message = self.client.messages.create(
+                model=self.model,
+                max_tokens=300,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_content}]
+            )
+
+            response_text = message.content[0].text
+
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "```" in response_text:
+                json_str = response_text.split("```")[1].split("```")[0]
+            else:
+                json_str = response_text
+
+            return json.loads(json_str.strip())
+
+        except Exception as e:
+            logger.error(f"Failed to get stage recommendation: {e}")
+            return {
+                "should_advance": False,
+                "recommended_stage": lead_data.get("current_stage", "new"),
+                "reason": "Could not analyze lead data",
+                "suggested_action": "Review lead manually"
             }

@@ -6,13 +6,16 @@ import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from .config import get_settings
-from .database import init_db
+from .database import init_db, get_db
+from .dependencies import get_current_user
+from .models import Lead, Campaign, BusinessProfile, User
 from .services.scheduler_service import start_scheduler, stop_scheduler
 from .routers import (
     search_router,
@@ -23,6 +26,9 @@ from .routers import (
 from .routers.linkedin import router as linkedin_router
 from .routers.automation import router as automation_router
 from .routers.auth import router as auth_router
+from .routers.csv_import import router as csv_import_router
+from .routers.analytics import router as analytics_router
+from .routers.intelligence import router as intelligence_router
 
 # Configure logging
 logging.basicConfig(
@@ -89,6 +95,9 @@ app.include_router(campaigns_router)
 app.include_router(business_profiles_router)
 app.include_router(linkedin_router)
 app.include_router(automation_router)
+app.include_router(csv_import_router)
+app.include_router(analytics_router)
+app.include_router(intelligence_router)
 
 
 @app.get("/api")
@@ -110,39 +119,30 @@ def health_check():
 
 @app.get("/api/stats")
 def get_global_stats(
-    current_user = None  # Made optional for backward compatibility during transition
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """Get global statistics for the current user."""
-    from fastapi import Depends
-    from .database import SessionLocal, get_db
-    from .models import Lead, Campaign, BusinessProfile
-    from .dependencies import get_current_user_optional
+    total_leads = db.query(Lead).filter(Lead.user_id == current_user.id).count()
+    total_campaigns = db.query(Campaign).filter(Campaign.user_id == current_user.id).count()
+    total_profiles = db.query(BusinessProfile).filter(BusinessProfile.user_id == current_user.id).count()
+    verified_leads = db.query(Lead).filter(Lead.user_id == current_user.id, Lead.email_verified == True).count()
+    hot_leads = db.query(Lead).filter(Lead.user_id == current_user.id, Lead.score_label == "hot").count()
+    contacted_leads = db.query(Lead).filter(
+        Lead.user_id == current_user.id,
+        Lead.connection_sent_at.isnot(None)
+    ).count()
 
-    db = SessionLocal()
-    try:
-        # If authenticated, filter by user_id
-        # During transition, allow unauthenticated access
-        user_filter = {}
-
-        total_leads = db.query(Lead).count()
-        total_campaigns = db.query(Campaign).count()
-        total_profiles = db.query(BusinessProfile).count()
-        verified_leads = db.query(Lead).filter(Lead.email_verified == True).count()
-        hot_leads = db.query(Lead).filter(Lead.score_label == "hot").count()
-        contacted_leads = db.query(Lead).filter(Lead.status == "contacted").count()
-
-        return {
-            "leads": {
-                "total": total_leads,
-                "verified": verified_leads,
-                "hot": hot_leads,
-                "contacted": contacted_leads
-            },
-            "campaigns": total_campaigns,
-            "business_profiles": total_profiles
-        }
-    finally:
-        db.close()
+    return {
+        "leads": {
+            "total": total_leads,
+            "verified": verified_leads,
+            "hot": hot_leads,
+            "contacted": contacted_leads
+        },
+        "campaigns": total_campaigns,
+        "business_profiles": total_profiles
+    }
 
 
 # Serve static frontend files in production

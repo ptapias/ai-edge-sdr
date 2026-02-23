@@ -73,6 +73,14 @@ export interface Lead {
   linkedin_url: string | null
   linkedin_provider_id: string | null
   linkedin_chat_id: string | null
+  sentiment_level: string | null
+  sentiment_reason: string | null
+  sentiment_analyzed_at: string | null
+  buying_signals: string | null
+  signal_strength: string | null
+  ai_recommended_stage: string | null
+  ai_recommendation_reason: string | null
+  priority_score: number | null
   score: number | null
   score_label: string | null
   score_reason: string | null
@@ -519,6 +527,220 @@ export const updateBusinessProfile = async (id: string, profile: Partial<Busines
 
 export const getGlobalStats = async (): Promise<GlobalStats> => {
   const response = await api.get('/stats')
+  return response.data
+}
+
+// === CSV Import ===
+
+export interface CSVPreviewResponse {
+  total_rows: number
+  duplicate_count: number
+  new_count: number
+  preview_rows: Record<string, unknown>[]
+  detected_columns: string[]
+  column_mapping: Record<string, string>
+  status_breakdown: Record<string, number>
+}
+
+export interface CSVImportResponse {
+  campaign_id: string
+  campaign_name: string
+  total_processed: number
+  imported: number
+  duplicates_skipped: number
+  errors: number
+  status_breakdown: Record<string, number>
+}
+
+export const previewCSVImport = async (file: File): Promise<CSVPreviewResponse> => {
+  const formData = new FormData()
+  formData.append('file', file)
+  const response = await api.post('/import/preview', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return response.data
+}
+
+export const executeCSVImport = async (data: {
+  campaign_name: string
+  campaign_description?: string
+  rows: Record<string, unknown>[]
+  column_mapping: Record<string, string>
+}): Promise<CSVImportResponse> => {
+  const response = await api.post('/import/execute', data)
+  return response.data
+}
+
+// === Analytics ===
+
+export interface PipelineStats {
+  pipeline: Record<string, number>
+  total: number
+}
+
+export interface ConversionFunnel {
+  total: number
+  funnel: Array<{
+    stage: string
+    count: number
+    cumulative: number
+    rate: number
+    conversion_from_previous?: number
+  }>
+}
+
+export interface TemperatureDistribution {
+  distribution: { hot: number; warm: number; cold: number; unscored: number }
+  total: number
+}
+
+export interface ResponseTracking {
+  contacted: number
+  connected: number
+  in_conversation: number
+  response_rate: number
+  conversation_rate: number
+  avg_days_to_connect: number | null
+}
+
+export interface ActivityTimeline {
+  period: string
+  timeline: Array<{
+    date: string
+    invitations: number
+    successful_invitations: number
+    connections: number
+  }>
+}
+
+export interface CampaignAnalytics {
+  campaigns: Array<{
+    id: string
+    name: string
+    total_leads: number
+    status_breakdown: Record<string, number>
+    score_breakdown: Record<string, number>
+    contacted: number
+    responded: number
+    response_rate: number
+    created_at: string | null
+  }>
+}
+
+export const getPipelineStats = async (): Promise<PipelineStats> => {
+  const response = await api.get('/analytics/pipeline')
+  return response.data
+}
+
+export const getConversionFunnel = async (): Promise<ConversionFunnel> => {
+  const response = await api.get('/analytics/conversion')
+  return response.data
+}
+
+export const getTemperatureDistribution = async (): Promise<TemperatureDistribution> => {
+  const response = await api.get('/analytics/temperature')
+  return response.data
+}
+
+export const getResponseTracking = async (): Promise<ResponseTracking> => {
+  const response = await api.get('/analytics/response-tracking')
+  return response.data
+}
+
+export const getActivityTimeline = async (period = '30d'): Promise<ActivityTimeline> => {
+  const response = await api.get('/analytics/activity', { params: { period } })
+  return response.data
+}
+
+export const getCampaignAnalytics = async (): Promise<CampaignAnalytics> => {
+  const response = await api.get('/analytics/campaigns')
+  return response.data
+}
+
+// === Intelligence ===
+
+export interface FocusLead {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  full_name: string
+  job_title: string | null
+  company_name: string | null
+  status: string
+  score: number | null
+  score_label: string | null
+  priority_score: number
+  has_conversation: boolean
+  linkedin_chat_id: string | null
+  sentiment_level: string | null
+  last_activity: string | null
+  recommended_action: string
+}
+
+export interface FocusLeadsResponse {
+  focus_leads: FocusLead[]
+}
+
+export interface BuyingSignalsResponse {
+  lead_id: string
+  signals: string[]
+  signal_strength: string
+  sentiment: string
+  summary: string
+}
+
+export const getFocusLeads = async (limit = 10): Promise<FocusLeadsResponse> => {
+  const response = await api.get('/intelligence/focus-leads', { params: { limit } })
+  return response.data
+}
+
+export const analyzeBuyingSignals = async (leadId: string): Promise<BuyingSignalsResponse> => {
+  const response = await api.post(`/intelligence/analyze-signals/${leadId}`)
+  return response.data
+}
+
+export const getStageRecommendation = async (leadId: string) => {
+  const response = await api.post(`/intelligence/stage-recommendation/${leadId}`)
+  return response.data
+}
+
+// === Pipeline ===
+
+export interface PipelineLead {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  full_name: string
+  job_title: string | null
+  company_name: string | null
+  score: number | null
+  score_label: string | null
+  has_conversation: boolean
+  linkedin_chat_id: string | null
+  response_status: 'responded' | 'awaiting' | 'no_contact'
+  sentiment_level: string | null
+  last_activity: string | null
+  updated_at: string | null
+}
+
+export interface PipelineData {
+  pipeline: Record<string, PipelineLead[]>
+}
+
+export const getPipelineLeads = async (): Promise<PipelineData> => {
+  const response = await api.get('/leads/pipeline')
+  return response.data
+}
+
+export const generateLinkedInMessageWithStrategy = async (
+  leadId: string,
+  businessId?: string,
+  strategy = 'hybrid'
+) => {
+  const params = new URLSearchParams()
+  if (businessId) params.append('business_id', businessId)
+  params.append('strategy', strategy)
+  const response = await api.post(`/leads/${leadId}/message/linkedin?${params}`)
   return response.data
 }
 

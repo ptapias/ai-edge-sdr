@@ -104,6 +104,16 @@ class Lead(Base):
     last_message_at = Column(DateTime, nullable=True)
     linkedin_chat_id = Column(String(100), nullable=True)  # Unipile chat ID
 
+    # AI Intelligence
+    sentiment_level = Column(String(10), nullable=True)  # hot/warm/cold
+    sentiment_reason = Column(Text, nullable=True)
+    sentiment_analyzed_at = Column(DateTime, nullable=True)
+    buying_signals = Column(Text, nullable=True)  # JSON list of detected signals
+    signal_strength = Column(String(20), nullable=True)  # strong/moderate/weak/none
+    ai_recommended_stage = Column(String(50), nullable=True)
+    ai_recommendation_reason = Column(Text, nullable=True)
+    priority_score = Column(Integer, nullable=True)  # Computed 0-100
+
     # Campaign relationship
     campaign_id = Column(String(36), ForeignKey("campaigns.id"), nullable=True)
     campaign = relationship("Campaign", back_populates="leads")

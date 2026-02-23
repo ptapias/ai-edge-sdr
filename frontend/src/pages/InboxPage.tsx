@@ -594,8 +594,24 @@ export default function InboxPage() {
                   </div>
                 </div>
 
-                {/* Conversation Analysis */}
+                {/* Conversation Analysis + Lead Intelligence */}
                 <div className="flex items-center gap-3">
+                  {/* Show lead intelligence if available */}
+                  {(() => {
+                    const lead = selectedChat ? findLeadForChat(selectedChat) : undefined
+                    if (lead?.signal_strength && lead.signal_strength !== 'none') {
+                      return (
+                        <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-yellow-50 border border-yellow-200">
+                          <Sparkles className="w-3.5 h-3.5 text-yellow-600" />
+                          <span className="text-xs font-medium text-yellow-700 capitalize">
+                            {lead.signal_strength} signals
+                          </span>
+                        </div>
+                      )
+                    }
+                    return null
+                  })()}
+
                   {conversationAnalysis && (
                     <div className="flex flex-col items-end">
                       <SentimentBadge analysis={conversationAnalysis} />

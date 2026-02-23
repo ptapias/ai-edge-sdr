@@ -29,7 +29,7 @@ import {
   getBusinessProfiles,
   verifyEmails,
   qualifyLeads,
-  generateLinkedInMessage,
+  generateLinkedInMessageWithStrategy,
   getLeadStatuses,
   updateLeadStatus,
   updateLeadNotes,
@@ -245,6 +245,7 @@ export default function LeadsPage() {
   const [updatingStatusFor, setUpdatingStatusFor] = useState<string | null>(null)
   const [editingNotes, setEditingNotes] = useState<string | null>(null)
   const [notesText, setNotesText] = useState('')
+  const [messageStrategy, setMessageStrategy] = useState<string>('hybrid')
   const queryClient = useQueryClient()
 
   const campaignId = searchParams.get('campaign_id')
@@ -296,7 +297,7 @@ export default function LeadsPage() {
   })
 
   const messageMutation = useMutation({
-    mutationFn: (leadId: string) => generateLinkedInMessage(leadId, defaultProfile?.id),
+    mutationFn: (leadId: string) => generateLinkedInMessageWithStrategy(leadId, defaultProfile?.id, messageStrategy),
     onSuccess: (data, leadId) => {
       queryClient.invalidateQueries({ queryKey: ['leads'] })
       const lead = leads?.leads.find(l => l.id === leadId)
@@ -523,6 +524,17 @@ export default function LeadsPage() {
               {s.label}
             </option>
           ))}
+        </select>
+
+        <select
+          className="input w-44"
+          value={messageStrategy}
+          onChange={(e) => setMessageStrategy(e.target.value)}
+          title="Message strategy for AI generation"
+        >
+          <option value="hybrid">Hybrid (Recommended)</option>
+          <option value="direct">Direct Pitch</option>
+          <option value="gradual">Gradual Connect</option>
         </select>
 
         <div className="flex gap-2 ml-auto">
@@ -791,6 +803,27 @@ export default function LeadsPage() {
                               </div>
                             )}
                           </div>
+
+                          {/* Sentiment & Intelligence */}
+                          {(lead as Lead & { sentiment_level?: string; signal_strength?: string; buying_signals?: string }).sentiment_level && (
+                            <div className="col-span-3 border-t pt-3 mt-2">
+                              <p className="text-gray-500 font-medium mb-2">AI Intelligence</p>
+                              <div className="flex items-center gap-3">
+                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                  (lead as Lead & { sentiment_level?: string }).sentiment_level === 'hot' ? 'bg-red-100 text-red-700' :
+                                  (lead as Lead & { sentiment_level?: string }).sentiment_level === 'warm' ? 'bg-orange-100 text-orange-700' :
+                                  'bg-blue-100 text-blue-700'
+                                }`}>
+                                  Sentiment: {(lead as Lead & { sentiment_level?: string }).sentiment_level}
+                                </span>
+                                {(lead as Lead & { signal_strength?: string }).signal_strength && (
+                                  <span className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                                    Signals: {(lead as Lead & { signal_strength?: string }).signal_strength}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
 
                           {lead.linkedin_message && (
                             <div className="col-span-3 border-t pt-3">

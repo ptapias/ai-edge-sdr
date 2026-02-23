@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Search, Users, BarChart3, Settings, Link2, MessageSquare, LogOut } from 'lucide-react'
+import { Search, Users, BarChart3, Settings, Link2, MessageSquare, LogOut, Upload, LayoutGrid } from 'lucide-react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import SearchPage from './pages/SearchPage'
@@ -8,6 +8,8 @@ import DashboardPage from './pages/DashboardPage'
 import SettingsPage from './pages/SettingsPage'
 import AutomationPage from './pages/AutomationPage'
 import InboxPage from './pages/InboxPage'
+import ImportPage from './pages/ImportPage'
+import PipelinePage from './pages/PipelinePage'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 
@@ -61,6 +63,32 @@ function Navigation() {
               >
                 <Users className="w-4 h-4 mr-2" />
                 Leads
+              </NavLink>
+              <NavLink
+                to="/pipeline"
+                className={({ isActive }) =>
+                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
+                    isActive
+                      ? 'text-blue-600 bg-blue-50'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                  }`
+                }
+              >
+                <LayoutGrid className="w-4 h-4 mr-2" />
+                Pipeline
+              </NavLink>
+              <NavLink
+                to="/import"
+                className={({ isActive }) =>
+                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
+                    isActive
+                      ? 'text-blue-600 bg-blue-50'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                  }`
+                }
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                Import
               </NavLink>
               <NavLink
                 to="/inbox"
@@ -184,6 +212,32 @@ function AppRoutes() {
               <Navigation />
               <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
                 <LeadsPage />
+              </main>
+            </div>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/pipeline"
+        element={
+          <ProtectedRoute>
+            <div className="min-h-screen bg-gray-50">
+              <Navigation />
+              <main className="max-w-full mx-auto py-6 px-4 sm:px-6 lg:px-8">
+                <PipelinePage />
+              </main>
+            </div>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/import"
+        element={
+          <ProtectedRoute>
+            <div className="min-h-screen bg-gray-50">
+              <Navigation />
+              <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+                <ImportPage />
               </main>
             </div>
           </ProtectedRoute>

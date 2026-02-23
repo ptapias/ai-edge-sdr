@@ -104,6 +104,14 @@ class LeadResponse(LeadBase):
     campaign_id: Optional[str] = None
     linkedin_provider_id: Optional[str] = None
     linkedin_chat_id: Optional[str] = None
+    sentiment_level: Optional[str] = None
+    sentiment_reason: Optional[str] = None
+    sentiment_analyzed_at: Optional[datetime] = None
+    buying_signals: Optional[str] = None
+    signal_strength: Optional[str] = None
+    ai_recommended_stage: Optional[str] = None
+    ai_recommendation_reason: Optional[str] = None
+    priority_score: Optional[int] = None
     connection_sent_at: Optional[datetime] = None
     connected_at: Optional[datetime] = None
     last_message_at: Optional[datetime] = None
