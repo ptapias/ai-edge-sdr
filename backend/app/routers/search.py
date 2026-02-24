@@ -141,3 +141,56 @@ def preview_search(
     result = claude_service.natural_language_to_filters(request.query)
     result.filters.fetch_count = request.max_results
     return result
+
+
+@router.get("/debug")
+def debug_search(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to test each search step individually."""
+    results = {"steps": {}}
+
+    # Step 1: DB test
+    try:
+        campaign = Campaign(
+            name="Debug Test",
+            search_query="debug",
+            user_id=current_user.id
+        )
+        db.add(campaign)
+        db.flush()
+        results["steps"]["db_flush"] = f"OK - campaign_id: {campaign.id}"
+        db.rollback()
+    except Exception as e:
+        results["steps"]["db_flush"] = f"FAIL: {str(e)}"
+
+    # Step 2: Claude test
+    try:
+        claude_service = ClaudeService()
+        results["steps"]["claude_init"] = "OK"
+    except Exception as e:
+        results["steps"]["claude_init"] = f"FAIL: {str(e)}"
+
+    # Step 3: Apify test
+    try:
+        apify_service = ApifyService()
+        results["steps"]["apify_init"] = f"OK - actor: {apify_service.actor_id}"
+    except Exception as e:
+        results["steps"]["apify_init"] = f"FAIL: {str(e)}"
+
+    # Step 4: Lead creation test
+    try:
+        test_lead = Lead(
+            first_name="Debug",
+            last_name="Test",
+            user_id=current_user.id
+        )
+        db.add(test_lead)
+        db.flush()
+        results["steps"]["lead_create"] = f"OK - lead_id: {test_lead.id}"
+        db.rollback()
+    except Exception as e:
+        results["steps"]["lead_create"] = f"FAIL: {str(e)}"
+
+    return results
