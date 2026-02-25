@@ -34,8 +34,11 @@ export default function EnrollLeadsModal({ sequenceId, sequenceName, onClose }: 
     mutationFn: () => enrollLeads(sequenceId, Array.from(selectedLeads)),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['sequence', sequenceId] })
+      queryClient.invalidateQueries({ queryKey: ['sequences'] })
       queryClient.invalidateQueries({ queryKey: ['enrollments', sequenceId] })
-      alert(`Enrolled ${result.enrolled} leads${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''}`)
+      const msg = `Enrolled ${result.enrolled} leads${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''}`
+      const activatedMsg = result.auto_activated ? '\n\nSequence has been automatically activated and will start sending connection requests.' : ''
+      alert(msg + activatedMsg)
       onClose()
     },
   })

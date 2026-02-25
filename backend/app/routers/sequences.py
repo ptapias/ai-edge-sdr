@@ -469,6 +469,13 @@ async def enroll_leads(
     sequence.total_enrolled = (sequence.total_enrolled or 0) + enrolled
     sequence.active_enrolled = (sequence.active_enrolled or 0) + enrolled
 
+    # Auto-activate DRAFT sequences when leads are enrolled
+    auto_activated = False
+    if enrolled > 0 and sequence.status == SequenceStatus.DRAFT.value:
+        sequence.status = SequenceStatus.ACTIVE.value
+        sequence.updated_at = datetime.utcnow()
+        auto_activated = True
+
     db.commit()
 
     return {
@@ -476,6 +483,7 @@ async def enroll_leads(
         "skipped": skipped,
         "errors": errors[:10],  # Limit error messages
         "total_in_sequence": sequence.total_enrolled,
+        "auto_activated": auto_activated,
     }
 
 
