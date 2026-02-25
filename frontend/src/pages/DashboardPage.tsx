@@ -187,7 +187,7 @@ export default function DashboardPage() {
         />
         <StatCard
           title="Avg. Time to Connect"
-          value={responseData?.avg_days_to_connect !== null ? `${responseData?.avg_days_to_connect}d` : 'N/A'}
+          value={responseData?.avg_days_to_connect != null ? `${responseData.avg_days_to_connect}d` : 'N/A'}
           icon={Clock}
           color="bg-blue-500"
           subtitle="Days from invitation to connection"
