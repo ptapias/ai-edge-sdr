@@ -247,6 +247,10 @@ async def _execute_follow_up(
     settings: Optional[AutomationSettings]
 ):
     """Send a follow-up message (post-connection)."""
+    # Respect working hours for follow-up messages
+    if settings and not settings.is_working_hour():
+        return  # Will retry next tick
+
     if not lead.linkedin_chat_id:
         # Can't send without chat ID; skip for now, connection detection will handle this
         return
@@ -391,56 +395,67 @@ async def detect_connection_changes(db: Session):
                     enrollment.phase_entered_at = datetime.utcnow()
                     enrollment.messages_in_phase = 0
                     enrollment.last_step_completed_at = datetime.utcnow()
-                    # Set next_step_due_at to now so the pipeline scheduler
-                    # will generate + send the apertura message on next tick
                     enrollment.next_step_due_at = None  # Pipeline uses reply-based, not timer
 
-                    # Generate and send the first apertura message immediately
-                    try:
-                        from .pipeline_scheduler import (
-                            _get_business_context as _pb_ctx,
-                            _get_lead_data as _pl_data,
-                            _format_conversation,
+                    # Respect working hours - defer apertura message if outside hours
+                    user_settings = db.query(AutomationSettings).filter(
+                        AutomationSettings.user_id == enrollment.user_id
+                    ).first()
+                    if user_settings and not user_settings.is_working_hour():
+                        # Connection is recorded, but apertura msg will be sent
+                        # by pipeline_scheduler on next tick inside working hours
+                        enrollment.next_step_due_at = datetime.utcnow()  # Signal to pipeline scheduler
+                        logger.info(
+                            f"[Sequence] Connection detected for {lead.display_name} (pipeline), "
+                            f"apertura deferred - outside working hours"
                         )
-                        sender_ctx = _pb_ctx(db, sequence.business_id)
-                        lead_d = _pl_data(lead)
-
-                        # Get conversation history (the connection request message)
+                    else:
+                        # Generate and send the first apertura message immediately
                         try:
-                            chat_result = await unipile.get_chat_messages(chat_id, limit=10)
-                            conv_history = _format_conversation(
-                                chat_result.get("data", {})
-                            ) if chat_result.get("success") else ""
-                        except Exception:
-                            conv_history = ""
-
-                        claude = ClaudeService()
-                        apertura_msg = claude.generate_phase_message(
-                            phase=PipelinePhase.APERTURA.value,
-                            lead_data=lead_d,
-                            sender_context=sender_ctx,
-                            conversation_history=conv_history,
-                            messages_in_phase=0,
-                        )
-
-                        send_result = await unipile.send_message(chat_id, apertura_msg)
-                        if send_result.get("success"):
-                            enrollment.messages_in_phase = 1
-                            enrollment.total_messages_sent = (enrollment.total_messages_sent or 0) + 1
-                            enrollment.store_message("pipeline_apertura_1", apertura_msg)
-                            lead.last_message_at = datetime.utcnow()
-                            lead.status = LeadStatus.IN_CONVERSATION.value
-                            logger.info(
-                                f"[Sequence] Pipeline APERTURA message sent to {lead.display_name} "
-                                f"on connection acceptance"
+                            from .pipeline_scheduler import (
+                                _get_business_context as _pb_ctx,
+                                _get_lead_data as _pl_data,
+                                _format_conversation,
                             )
-                        else:
-                            logger.warning(
-                                f"[Sequence] Failed to send apertura message to {lead.display_name}: "
-                                f"{send_result.get('error')}"
+                            sender_ctx = _pb_ctx(db, sequence.business_id)
+                            lead_d = _pl_data(lead)
+
+                            # Get conversation history (the connection request message)
+                            try:
+                                chat_result = await unipile.get_chat_messages(chat_id, limit=10)
+                                conv_history = _format_conversation(
+                                    chat_result.get("data", {})
+                                ) if chat_result.get("success") else ""
+                            except Exception:
+                                conv_history = ""
+
+                            claude = ClaudeService()
+                            apertura_msg = claude.generate_phase_message(
+                                phase=PipelinePhase.APERTURA.value,
+                                lead_data=lead_d,
+                                sender_context=sender_ctx,
+                                conversation_history=conv_history,
+                                messages_in_phase=0,
                             )
-                    except Exception as e:
-                        logger.error(f"[Sequence] Error sending apertura on connection: {e}")
+
+                            send_result = await unipile.send_message(chat_id, apertura_msg)
+                            if send_result.get("success"):
+                                enrollment.messages_in_phase = 1
+                                enrollment.total_messages_sent = (enrollment.total_messages_sent or 0) + 1
+                                enrollment.store_message("pipeline_apertura_1", apertura_msg)
+                                lead.last_message_at = datetime.utcnow()
+                                lead.status = LeadStatus.IN_CONVERSATION.value
+                                logger.info(
+                                    f"[Sequence] Pipeline APERTURA message sent to {lead.display_name} "
+                                    f"on connection acceptance"
+                                )
+                            else:
+                                logger.warning(
+                                    f"[Sequence] Failed to send apertura message to {lead.display_name}: "
+                                    f"{send_result.get('error')}"
+                                )
+                        except Exception as e:
+                            logger.error(f"[Sequence] Error sending apertura on connection: {e}")
 
                 else:
                     # Classic mode: advance enrollment to next step

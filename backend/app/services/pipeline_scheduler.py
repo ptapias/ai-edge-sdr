@@ -655,3 +655,85 @@ async def process_time_based_phases(db: Session):
         except Exception as e:
             logger.error(f"[Pipeline] Error processing reactivation for enrollment {enrollment.id}: {e}")
             continue
+
+    # ── 3. Process deferred apertura messages ──
+    # When a connection is detected outside working hours, the apertura message
+    # is deferred: messages_in_phase=0, next_step_due_at is set, phase=APERTURA.
+    # Pick these up and send the apertura now (if within working hours).
+    deferred_apertura = db.query(SequenceEnrollment).join(
+        Lead, SequenceEnrollment.lead_id == Lead.id
+    ).join(
+        Sequence, SequenceEnrollment.sequence_id == Sequence.id
+    ).filter(
+        SequenceEnrollment.status == EnrollmentStatus.ACTIVE.value,
+        Sequence.sequence_mode == SequenceMode.SMART_PIPELINE.value,
+        SequenceEnrollment.current_phase == PipelinePhase.APERTURA.value,
+        SequenceEnrollment.messages_in_phase == 0,
+        SequenceEnrollment.next_step_due_at.isnot(None),
+        SequenceEnrollment.next_step_due_at <= now,
+        Lead.linkedin_chat_id.isnot(None),
+    ).limit(3).all()
+
+    for enrollment in deferred_apertura:
+        try:
+            lead = db.query(Lead).filter(Lead.id == enrollment.lead_id).first()
+            sequence = db.query(Sequence).filter(Sequence.id == enrollment.sequence_id).first()
+            if not lead or not sequence:
+                continue
+
+            # Check working hours
+            settings = db.query(AutomationSettings).filter(
+                AutomationSettings.user_id == enrollment.user_id
+            ).first()
+            if settings and not settings.is_working_hour():
+                continue  # Will retry next tick
+
+            unipile = _get_user_unipile_service(db, enrollment.user_id)
+            sender_context = _get_business_context(db, sequence.business_id)
+            lead_data = _get_lead_data(lead)
+
+            # Get conversation history
+            try:
+                chat_result = await unipile.get_chat_messages(lead.linkedin_chat_id, limit=10)
+                conversation_history = _format_conversation(
+                    chat_result.get("data", {})
+                ) if chat_result.get("success") else ""
+            except Exception:
+                conversation_history = ""
+
+            claude = ClaudeService()
+            apertura_msg = claude.generate_phase_message(
+                phase=PipelinePhase.APERTURA.value,
+                lead_data=lead_data,
+                sender_context=sender_context,
+                conversation_history=conversation_history,
+                messages_in_phase=0,
+            )
+
+            result = await unipile.send_message(lead.linkedin_chat_id, apertura_msg)
+
+            if result.get("success"):
+                enrollment.messages_in_phase = 1
+                enrollment.total_messages_sent = (enrollment.total_messages_sent or 0) + 1
+                enrollment.last_step_completed_at = now
+                enrollment.next_step_due_at = None  # Pipeline uses reply-based from here
+                enrollment.store_message("pipeline_apertura_1", apertura_msg)
+
+                lead.last_message_at = now
+                if lead.status == LeadStatus.CONNECTED.value:
+                    lead.status = LeadStatus.IN_CONVERSATION.value
+
+                db.commit()
+                logger.info(
+                    f"[Pipeline] Deferred APERTURA message sent to {lead.display_name} "
+                    f"(connection detected outside working hours)"
+                )
+            else:
+                logger.error(
+                    f"[Pipeline] Failed deferred apertura for {lead.display_name}: "
+                    f"{result.get('error')}"
+                )
+
+        except Exception as e:
+            logger.error(f"[Pipeline] Error processing deferred apertura for enrollment {enrollment.id}: {e}")
+            continue

@@ -13,7 +13,8 @@ import {
   CheckCircle2,
   ChevronRight,
   Settings2,
-  UserPlus
+  UserPlus,
+  Moon
 } from 'lucide-react'
 import {
   getSequences,
@@ -22,6 +23,7 @@ import {
   deleteSequence,
   updateSequenceStatus,
   getBusinessProfiles,
+  getAutomationStatus,
 } from '../services/api'
 import type { SequenceListItem, BusinessProfile, SequenceCreateData, SequenceMode } from '../services/api'
 import SequenceBuilder from '../components/sequences/SequenceBuilder'
@@ -36,6 +38,7 @@ const statusColors: Record<string, { bg: string; text: string; dot: string }> = 
   active: { bg: 'bg-green-100', text: 'text-green-700', dot: 'bg-green-500' },
   paused: { bg: 'bg-yellow-100', text: 'text-yellow-700', dot: 'bg-yellow-500' },
   archived: { bg: 'bg-gray-100', text: 'text-gray-500', dot: 'bg-gray-400' },
+  outside_hours: { bg: 'bg-indigo-100', text: 'text-indigo-700', dot: 'bg-indigo-400' },
 }
 
 export default function SequencesPage() {
@@ -44,6 +47,13 @@ export default function SequencesPage() {
   const [activeTab, setActiveTab] = useState<DetailTab>('steps')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEnrollModal, setShowEnrollModal] = useState(false)
+
+  // Fetch automation status (for working hours indicator)
+  const { data: automationStatus } = useQuery({
+    queryKey: ['automation-status'],
+    queryFn: getAutomationStatus,
+    refetchInterval: 60_000, // Check every minute
+  })
 
   // Fetch sequences list
   const { data: sequences, isLoading: listLoading } = useQuery({
@@ -126,7 +136,10 @@ export default function SequencesPage() {
             <div className="flex-1 overflow-y-auto">
               {sequences.map((seq: SequenceListItem) => {
                 const isSelected = selectedId === seq.id
-                const colors = statusColors[seq.status] || statusColors.draft
+                const isOutsideHours = seq.status === 'active' && automationStatus && !automationStatus.is_working_hour
+                const displayStatus = isOutsideHours ? 'outside_hours' : seq.status
+                const displayLabel = isOutsideHours ? 'Fuera de horario' : seq.status
+                const colors = statusColors[displayStatus] || statusColors.draft
 
                 return (
                   <button
@@ -141,8 +154,12 @@ export default function SequencesPage() {
                         <div className="flex items-center gap-2">
                           <p className="text-sm font-medium text-gray-900 truncate">{seq.name}</p>
                           <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs ${colors.bg} ${colors.text}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${colors.dot}`} />
-                            {seq.status}
+                            {isOutsideHours ? (
+                              <Moon className="w-3 h-3" />
+                            ) : (
+                              <span className={`w-1.5 h-1.5 rounded-full ${colors.dot}`} />
+                            )}
+                            {displayLabel}
                           </span>
                         </div>
                         {seq.description && (
@@ -190,12 +207,22 @@ export default function SequencesPage() {
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-lg font-semibold text-gray-900">{selectedSequence.name}</h3>
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${
-                      statusColors[selectedSequence.status]?.bg || 'bg-gray-100'
-                    } ${statusColors[selectedSequence.status]?.text || 'text-gray-700'}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${statusColors[selectedSequence.status]?.dot || 'bg-gray-400'}`} />
-                      {selectedSequence.status}
-                    </span>
+                    {(() => {
+                      const isOutside = selectedSequence.status === 'active' && automationStatus && !automationStatus.is_working_hour
+                      const dStatus = isOutside ? 'outside_hours' : selectedSequence.status
+                      const dLabel = isOutside ? 'Fuera de horario' : selectedSequence.status
+                      const dColors = statusColors[dStatus] || statusColors.draft
+                      return (
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${dColors.bg} ${dColors.text}`}>
+                          {isOutside ? (
+                            <Moon className="w-3 h-3" />
+                          ) : (
+                            <span className={`w-1.5 h-1.5 rounded-full ${dColors.dot}`} />
+                          )}
+                          {dLabel}
+                        </span>
+                      )
+                    })()}
                   </div>
                   {selectedSequence.description && (
                     <p className="text-sm text-gray-500 mt-0.5">{selectedSequence.description}</p>
