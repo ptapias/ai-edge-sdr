@@ -15,7 +15,9 @@ from sqlalchemy.orm import Session
 from ..database import SessionLocal
 from ..models import Lead, AutomationSettings, InvitationLog, Campaign
 from ..models.lead import LeadStatus
+from ..models.user import LinkedInAccount
 from .unipile_service import UnipileService
+from .encryption_service import get_encryption_service
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +87,18 @@ async def send_automatic_invitation(db: Session) -> dict:
     if not lead:
         return {"sent": False, "reason": "No eligible leads"}
 
-    # Send invitation via Unipile
+    # Send invitation via Unipile (use per-user credentials if available)
     unipile = UnipileService()
+    if lead.user_id:
+        linkedin_account = db.query(LinkedInAccount).filter(
+            LinkedInAccount.user_id == lead.user_id,
+            LinkedInAccount.is_connected == True
+        ).first()
+        if linkedin_account and linkedin_account.unipile_api_key_encrypted:
+            encryption_service = get_encryption_service()
+            api_key = encryption_service.decrypt(linkedin_account.unipile_api_key_encrypted)
+            account_id = linkedin_account.unipile_account_id
+            unipile = UnipileService(api_key=api_key, account_id=account_id)
     result = await unipile.send_invitation_by_url(lead.linkedin_url, lead.linkedin_message)
 
     # Get campaign name for the log

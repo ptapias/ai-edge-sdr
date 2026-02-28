@@ -14,14 +14,32 @@ from sqlalchemy.orm import Session
 
 from ..models import Lead, AutomationSettings, InvitationLog, Campaign
 from ..models.lead import LeadStatus
+from ..models.user import LinkedInAccount
 from ..models.sequence import (
     Sequence, SequenceStep, SequenceEnrollment,
     SequenceStatus, StepType, EnrollmentStatus
 )
 from .unipile_service import UnipileService
 from .claude_service import ClaudeService
+from .encryption_service import get_encryption_service
 
 logger = logging.getLogger(__name__)
+
+
+def _get_user_unipile_service(db: Session, user_id: str) -> UnipileService:
+    """Get UnipileService with user's credentials if available, else default."""
+    linkedin_account = db.query(LinkedInAccount).filter(
+        LinkedInAccount.user_id == user_id,
+        LinkedInAccount.is_connected == True
+    ).first()
+
+    if linkedin_account and linkedin_account.unipile_api_key_encrypted:
+        encryption_service = get_encryption_service()
+        api_key = encryption_service.decrypt(linkedin_account.unipile_api_key_encrypted)
+        account_id = linkedin_account.unipile_account_id
+        return UnipileService(api_key=api_key, account_id=account_id)
+    else:
+        return UnipileService()
 
 
 def _get_business_context(db: Session, business_id: Optional[str]) -> dict:
@@ -166,8 +184,8 @@ async def _execute_connection_request(
 
     message = claude.generate_linkedin_message(lead_data, sender_context, sequence.message_strategy)
 
-    # Send via Unipile
-    unipile = UnipileService()
+    # Send via Unipile (use per-user credentials)
+    unipile = _get_user_unipile_service(db, enrollment.user_id)
     result = await unipile.send_invitation_by_url(lead.linkedin_url, message)
 
     # Log the invitation attempt
@@ -224,8 +242,8 @@ async def _execute_follow_up(
         # Can't send without chat ID; skip for now, connection detection will handle this
         return
 
-    # Get conversation history for context
-    unipile = UnipileService()
+    # Get conversation history for context (use per-user credentials)
+    unipile = _get_user_unipile_service(db, enrollment.user_id)
     try:
         chat_result = await unipile.get_chat_messages(lead.linkedin_chat_id, limit=20)
         conversation_history = _format_conversation(chat_result.get("data", {})) if chat_result.get("success") else ""
@@ -303,8 +321,14 @@ async def detect_connection_changes(db: Session):
 
     logger.info(f"[Sequence] Checking connection status for {len(waiting)} enrolled leads")
 
-    # Make one Unipile API call to get chats
-    unipile = UnipileService()
+    # Group enrollments by user_id to use per-user credentials
+    user_ids = set(e.user_id for e in waiting if e.user_id)
+    if not user_ids:
+        return
+
+    # Use first user's credentials (typically single-user system)
+    user_id = next(iter(user_ids))
+    unipile = _get_user_unipile_service(db, user_id)
     try:
         chats_result = await unipile.get_chats(limit=100, force_refresh=True)
     except Exception as e:
@@ -402,7 +426,10 @@ async def detect_replies(db: Session):
 
     logger.info(f"[Sequence] Checking replies for {len(active)} active enrollments")
 
-    unipile = UnipileService()
+    # Use per-user credentials
+    user_ids = set(e.user_id for e in active if e.user_id)
+    user_id = next(iter(user_ids)) if user_ids else None
+    unipile = _get_user_unipile_service(db, user_id) if user_id else UnipileService()
     replied_count = 0
 
     for enrollment in active:
