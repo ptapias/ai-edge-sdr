@@ -112,6 +112,9 @@ async def process_sequence_actions(db: Session):
         SequenceEnrollment.next_step_due_at <= now,
     ).limit(5).all()  # Process max 5 per tick to avoid overload
 
+    if due_enrollments:
+        logger.info(f"[Sequence] Found {len(due_enrollments)} due enrollments to process")
+
     for enrollment in due_enrollments:
         try:
             sequence = db.query(Sequence).filter(Sequence.id == enrollment.sequence_id).first()
