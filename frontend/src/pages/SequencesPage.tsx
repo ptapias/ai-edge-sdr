@@ -430,6 +430,7 @@ function CreateSequenceModal({
       business_id: businessId || undefined,
       message_strategy: strategy,
       sequence_mode: sequenceMode,
+      steps: [],
     })
   }
 
