@@ -13,7 +13,8 @@ from ..dependencies import get_current_user
 from ..models import Lead, User
 from ..models.sequence import (
     Sequence, SequenceStep, SequenceEnrollment,
-    SequenceStatus, StepType, EnrollmentStatus
+    SequenceStatus, StepType, EnrollmentStatus,
+    SequenceMode, PipelinePhase
 )
 from ..schemas.sequence import (
     SequenceCreate, SequenceUpdate, SequenceStatusUpdate,
@@ -49,6 +50,7 @@ async def list_sequences(
             description=seq.description,
             status=seq.status,
             message_strategy=seq.message_strategy,
+            sequence_mode=seq.sequence_mode or "classic",
             total_enrolled=seq.total_enrolled or 0,
             active_enrolled=seq.active_enrolled or 0,
             completed_count=seq.completed_count or 0,
@@ -86,6 +88,7 @@ async def get_dashboard(
             description=seq.description,
             status=seq.status,
             message_strategy=seq.message_strategy,
+            sequence_mode=seq.sequence_mode or "classic",
             total_enrolled=seq.total_enrolled or 0,
             active_enrolled=seq.active_enrolled or 0,
             completed_count=seq.completed_count or 0,
@@ -121,21 +124,34 @@ async def create_sequence(
         status=SequenceStatus.DRAFT.value,
         business_id=data.business_id,
         message_strategy=data.message_strategy,
+        sequence_mode=data.sequence_mode,
         user_id=current_user.id,
     )
     db.add(sequence)
 
-    # Create steps if provided
-    for i, step_data in enumerate(data.steps, start=1):
+    # For smart_pipeline, auto-create a connection_request step (the only "step" needed)
+    if data.sequence_mode == SequenceMode.SMART_PIPELINE.value:
         step = SequenceStep(
             id=str(uuid.uuid4()),
             sequence_id=sequence.id,
-            step_order=i,
-            step_type=step_data.step_type,
-            delay_days=step_data.delay_days,
-            prompt_context=step_data.prompt_context,
+            step_order=1,
+            step_type=StepType.CONNECTION_REQUEST.value,
+            delay_days=0,
+            prompt_context="Smart pipeline: connection request with gradual opening approach",
         )
         db.add(step)
+    else:
+        # Classic mode: Create steps if provided
+        for i, step_data in enumerate(data.steps, start=1):
+            step = SequenceStep(
+                id=str(uuid.uuid4()),
+                sequence_id=sequence.id,
+                step_order=i,
+                step_type=step_data.step_type,
+                delay_days=step_data.delay_days,
+                prompt_context=step_data.prompt_context,
+            )
+            db.add(step)
 
     db.commit()
     db.refresh(sequence)
@@ -569,6 +585,14 @@ async def list_enrollments(
             lead_job_title=lead.job_title if lead else None,
             lead_status=lead.status if lead else None,
             lead_score_label=lead.score_label if lead else None,
+            # Smart Pipeline fields
+            current_phase=e.current_phase,
+            phase_entered_at=e.phase_entered_at,
+            last_response_at=e.last_response_at,
+            messages_in_phase=e.messages_in_phase or 0,
+            nurture_count=e.nurture_count or 0,
+            reactivation_count=e.reactivation_count or 0,
+            total_messages_sent=e.total_messages_sent or 0,
         ))
 
     return result
@@ -601,11 +625,12 @@ async def get_sequence_stats(
     failed = sum(1 for e in enrollments if e.status == EnrollmentStatus.FAILED.value)
     paused = sum(1 for e in enrollments if e.status == EnrollmentStatus.PAUSED.value)
     withdrawn = sum(1 for e in enrollments if e.status == EnrollmentStatus.WITHDRAWN.value)
+    parked = sum(1 for e in enrollments if e.status == EnrollmentStatus.PARKED.value)
 
     reply_rate = (replied / total * 100) if total > 0 else 0
     completion_rate = (completed / total * 100) if total > 0 else 0
 
-    # Steps breakdown
+    # Steps breakdown (classic mode)
     steps = db.query(SequenceStep).filter(
         SequenceStep.sequence_id == sequence_id
     ).order_by(SequenceStep.step_order).all()
@@ -621,9 +646,37 @@ async def get_sequence_stats(
             "completed": step_completed,
         })
 
+    # Phase breakdown (smart pipeline mode)
+    phase_breakdown = None
+    is_pipeline = (sequence.sequence_mode or "classic") == SequenceMode.SMART_PIPELINE.value
+    if is_pipeline:
+        active_enrollments = [e for e in enrollments if e.status in [
+            EnrollmentStatus.ACTIVE.value, EnrollmentStatus.PARKED.value
+        ]]
+        phase_breakdown = {
+            "awaiting_connection": sum(1 for e in active_enrollments if not e.current_phase),
+            "apertura": sum(1 for e in active_enrollments if e.current_phase == PipelinePhase.APERTURA.value),
+            "calificacion": sum(1 for e in active_enrollments if e.current_phase == PipelinePhase.CALIFICACION.value),
+            "valor": sum(1 for e in active_enrollments if e.current_phase == PipelinePhase.VALOR.value),
+            "nurture": sum(1 for e in active_enrollments if e.current_phase == PipelinePhase.NURTURE.value),
+            "reactivacion": sum(1 for e in active_enrollments if e.current_phase == PipelinePhase.REACTIVACION.value),
+            "meeting": sum(1 for e in enrollments if e.status == EnrollmentStatus.COMPLETED.value and getattr(e, '_meeting', False)),
+            "parked": parked,
+            "exited": sum(1 for e in enrollments if e.status == EnrollmentStatus.COMPLETED.value),
+        }
+        # Count meetings from leads that reached MEETING_SCHEDULED status
+        meeting_leads = 0
+        for e in enrollments:
+            if e.status == EnrollmentStatus.COMPLETED.value:
+                lead = db.query(Lead).filter(Lead.id == e.lead_id).first()
+                if lead and lead.status == "meeting_scheduled":
+                    meeting_leads += 1
+        phase_breakdown["meeting"] = meeting_leads
+
     return SequenceStatsResponse(
         sequence_id=sequence.id,
         sequence_name=sequence.name,
+        sequence_mode=sequence.sequence_mode or "classic",
         total_enrolled=total,
         active=active,
         completed=completed,
@@ -631,7 +684,9 @@ async def get_sequence_stats(
         failed=failed,
         paused=paused,
         withdrawn=withdrawn,
+        parked=parked,
         reply_rate=round(reply_rate, 1),
         completion_rate=round(completion_rate, 1),
         steps_breakdown=steps_breakdown,
+        phase_breakdown=phase_breakdown,
     )

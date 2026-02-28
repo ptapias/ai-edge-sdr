@@ -156,8 +156,9 @@ async def scheduler_loop():
     """
     global _scheduler_running
     from .sequence_scheduler import process_sequence_actions, detect_connection_changes, detect_replies
+    from .pipeline_scheduler import detect_pipeline_replies, process_time_based_phases
 
-    logger.info("[Scheduler] Starting combined scheduler (invitations + sequences)")
+    logger.info("[Scheduler] Starting combined scheduler (invitations + sequences + pipeline)")
 
     tick_count = 0
     while _scheduler_running:
@@ -191,6 +192,17 @@ async def scheduler_loop():
                         await detect_replies(db)
                     except Exception as e:
                         logger.error(f"[Scheduler] Error detecting replies: {e}")
+
+                # Phase 5: Smart pipeline processing (every ~5 min, offset from Phase 3 & 4)
+                if tick_count % 10 == 3:
+                    try:
+                        await detect_pipeline_replies(db)
+                    except Exception as e:
+                        logger.error(f"[Scheduler] Error in pipeline reply detection: {e}")
+                    try:
+                        await process_time_based_phases(db)
+                    except Exception as e:
+                        logger.error(f"[Scheduler] Error in pipeline time-based phases: {e}")
 
                 tick_count += 1
             finally:

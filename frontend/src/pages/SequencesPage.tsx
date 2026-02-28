@@ -23,7 +23,7 @@ import {
   updateSequenceStatus,
   getBusinessProfiles,
 } from '../services/api'
-import type { SequenceListItem, BusinessProfile, SequenceCreateData } from '../services/api'
+import type { SequenceListItem, BusinessProfile, SequenceCreateData, SequenceMode } from '../services/api'
 import SequenceBuilder from '../components/sequences/SequenceBuilder'
 import EnrollLeadsModal from '../components/sequences/EnrollLeadsModal'
 import EnrollmentTable from '../components/sequences/EnrollmentTable'
@@ -149,10 +149,17 @@ export default function SequencesPage() {
                           <p className="text-xs text-gray-500 truncate mt-0.5">{seq.description}</p>
                         )}
                         <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
-                          <span className="flex items-center gap-1">
-                            <GitBranch className="w-3 h-3" />
-                            {seq.steps_count} steps
-                          </span>
+                          {seq.sequence_mode === 'smart_pipeline' ? (
+                            <span className="flex items-center gap-1 text-purple-500 font-medium">
+                              <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+                              Pipeline
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1">
+                              <GitBranch className="w-3 h-3" />
+                              {seq.steps_count} steps
+                            </span>
+                          )}
                           <span className="flex items-center gap-1">
                             <Users className="w-3 h-3" />
                             {seq.active_enrolled} active
@@ -266,10 +273,10 @@ export default function SequencesPage() {
               <div className="border-b flex-shrink-0">
                 <div className="flex">
                   <TabButton
-                    label="Steps"
+                    label={selectedSequence.sequence_mode === 'smart_pipeline' ? 'Pipeline' : 'Steps'}
                     icon={Settings2}
                     active={activeTab === 'steps'}
-                    count={selectedSequence.steps.length}
+                    count={selectedSequence.sequence_mode === 'smart_pipeline' ? undefined : selectedSequence.steps.length}
                     onClick={() => setActiveTab('steps')}
                   />
                   <TabButton
@@ -303,6 +310,7 @@ export default function SequencesPage() {
                       <EnrollmentTable
                         sequenceId={selectedSequence.id}
                         isActive={selectedSequence.status === 'active'}
+                        isPipeline={selectedSequence.sequence_mode === 'smart_pipeline'}
                       />
                     )}
                     {activeTab === 'stats' && (
@@ -398,6 +406,7 @@ function CreateSequenceModal({
   const [description, setDescription] = useState('')
   const [businessId, setBusinessId] = useState('')
   const [strategy, setStrategy] = useState('hybrid')
+  const [sequenceMode, setSequenceMode] = useState<SequenceMode>('classic')
 
   const { data: profiles } = useQuery({
     queryKey: ['business-profiles'],
@@ -420,6 +429,7 @@ function CreateSequenceModal({
       description: description.trim() || undefined,
       business_id: businessId || undefined,
       message_strategy: strategy,
+      sequence_mode: sequenceMode,
     })
   }
 
@@ -469,6 +479,42 @@ function CreateSequenceModal({
           </div>
 
           <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Pipeline Mode</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setSequenceMode('classic')}
+                className={`p-3 rounded-lg border-2 text-left transition-all ${
+                  sequenceMode === 'classic'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <p className="text-sm font-medium text-gray-900">Classic</p>
+                <p className="text-xs text-gray-500 mt-0.5">Timer-based steps</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSequenceMode('smart_pipeline')}
+                className={`p-3 rounded-lg border-2 text-left transition-all ${
+                  sequenceMode === 'smart_pipeline'
+                    ? 'border-purple-500 bg-purple-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <p className="text-sm font-medium text-gray-900">Smart Pipeline</p>
+                <p className="text-xs text-gray-500 mt-0.5">AI-driven 5 phases</p>
+              </button>
+            </div>
+            {sequenceMode === 'smart_pipeline' && (
+              <p className="text-xs text-purple-600 mt-2">
+                AI analyzes responses and advances leads through 5 phases: Opening → Qualification → Value → Nurture → Reactivation
+              </p>
+            )}
+          </div>
+
+          {sequenceMode === 'classic' && (
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Message Strategy</label>
             <select
               value={strategy}
@@ -483,6 +529,7 @@ function CreateSequenceModal({
               Determines the AI's tone for generating messages
             </p>
           </div>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn btn-secondary">

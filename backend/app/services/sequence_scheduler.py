@@ -17,7 +17,8 @@ from ..models.lead import LeadStatus
 from ..models.user import LinkedInAccount
 from ..models.sequence import (
     Sequence, SequenceStep, SequenceEnrollment,
-    SequenceStatus, StepType, EnrollmentStatus
+    SequenceStatus, StepType, EnrollmentStatus,
+    SequenceMode, PipelinePhase
 )
 from .unipile_service import UnipileService
 from .claude_service import ClaudeService
@@ -100,10 +101,14 @@ async def process_sequence_actions(db: Session):
     now = datetime.utcnow()
 
     # Find enrollments where next_step_due_at <= now AND status = active
-    due_enrollments = db.query(SequenceEnrollment).filter(
+    # Exclude smart_pipeline enrollments (handled by pipeline_scheduler.py)
+    due_enrollments = db.query(SequenceEnrollment).join(
+        Sequence, SequenceEnrollment.sequence_id == Sequence.id
+    ).filter(
         SequenceEnrollment.status == EnrollmentStatus.ACTIVE.value,
         SequenceEnrollment.next_step_due_at.isnot(None),
-        SequenceEnrollment.next_step_due_at <= now
+        SequenceEnrollment.next_step_due_at <= now,
+        Sequence.sequence_mode != SequenceMode.SMART_PIPELINE.value,
     ).limit(5).all()  # Process max 5 per tick to avoid overload
 
     for enrollment in due_enrollments:
@@ -372,30 +377,91 @@ async def detect_connection_changes(db: Session):
                 lead.connected_at = datetime.utcnow()
                 lead.linkedin_chat_id = chat_id
 
-                # Advance enrollment to next step
-                enrollment.current_step_order += 1
-                enrollment.last_step_completed_at = datetime.utcnow()
+                # Check if this is a smart_pipeline sequence
+                sequence = db.query(Sequence).filter(Sequence.id == enrollment.sequence_id).first()
+                is_pipeline = sequence and sequence.sequence_mode == SequenceMode.SMART_PIPELINE.value
 
-                next_step = db.query(SequenceStep).filter(
-                    SequenceStep.sequence_id == enrollment.sequence_id,
-                    SequenceStep.step_order == enrollment.current_step_order
-                ).first()
+                if is_pipeline:
+                    # Smart Pipeline: initialize APERTURA phase
+                    enrollment.current_phase = PipelinePhase.APERTURA.value
+                    enrollment.phase_entered_at = datetime.utcnow()
+                    enrollment.messages_in_phase = 0
+                    enrollment.last_step_completed_at = datetime.utcnow()
+                    # Set next_step_due_at to now so the pipeline scheduler
+                    # will generate + send the apertura message on next tick
+                    enrollment.next_step_due_at = None  # Pipeline uses reply-based, not timer
 
-                if next_step:
-                    enrollment.next_step_due_at = datetime.utcnow() + timedelta(days=next_step.delay_days)
-                    logger.info(
-                        f"[Sequence] Connection detected for {lead.display_name}, "
-                        f"next step in {next_step.delay_days} days"
-                    )
+                    # Generate and send the first apertura message immediately
+                    try:
+                        from .pipeline_scheduler import (
+                            _get_business_context as _pb_ctx,
+                            _get_lead_data as _pl_data,
+                            _format_conversation,
+                        )
+                        sender_ctx = _pb_ctx(db, sequence.business_id)
+                        lead_d = _pl_data(lead)
+
+                        # Get conversation history (the connection request message)
+                        try:
+                            chat_result = await unipile.get_chat_messages(chat_id, limit=10)
+                            conv_history = _format_conversation(
+                                chat_result.get("data", {})
+                            ) if chat_result.get("success") else ""
+                        except Exception:
+                            conv_history = ""
+
+                        claude = ClaudeService()
+                        apertura_msg = claude.generate_phase_message(
+                            phase=PipelinePhase.APERTURA.value,
+                            lead_data=lead_d,
+                            sender_context=sender_ctx,
+                            conversation_history=conv_history,
+                            messages_in_phase=0,
+                        )
+
+                        send_result = await unipile.send_message(chat_id, apertura_msg)
+                        if send_result.get("success"):
+                            enrollment.messages_in_phase = 1
+                            enrollment.total_messages_sent = (enrollment.total_messages_sent or 0) + 1
+                            enrollment.store_message("pipeline_apertura_1", apertura_msg)
+                            lead.last_message_at = datetime.utcnow()
+                            lead.status = LeadStatus.IN_CONVERSATION.value
+                            logger.info(
+                                f"[Sequence] Pipeline APERTURA message sent to {lead.display_name} "
+                                f"on connection acceptance"
+                            )
+                        else:
+                            logger.warning(
+                                f"[Sequence] Failed to send apertura message to {lead.display_name}: "
+                                f"{send_result.get('error')}"
+                            )
+                    except Exception as e:
+                        logger.error(f"[Sequence] Error sending apertura on connection: {e}")
+
                 else:
-                    # No more steps after connection
-                    enrollment.status = EnrollmentStatus.COMPLETED.value
-                    enrollment.completed_at = datetime.utcnow()
-                    sequence = db.query(Sequence).filter(Sequence.id == enrollment.sequence_id).first()
-                    if sequence:
-                        sequence.completed_count = (sequence.completed_count or 0) + 1
-                        sequence.active_enrolled = max(0, (sequence.active_enrolled or 0) - 1)
-                    lead.active_sequence_id = None
+                    # Classic mode: advance enrollment to next step
+                    enrollment.current_step_order += 1
+                    enrollment.last_step_completed_at = datetime.utcnow()
+
+                    next_step = db.query(SequenceStep).filter(
+                        SequenceStep.sequence_id == enrollment.sequence_id,
+                        SequenceStep.step_order == enrollment.current_step_order
+                    ).first()
+
+                    if next_step:
+                        enrollment.next_step_due_at = datetime.utcnow() + timedelta(days=next_step.delay_days)
+                        logger.info(
+                            f"[Sequence] Connection detected for {lead.display_name}, "
+                            f"next step in {next_step.delay_days} days"
+                        )
+                    else:
+                        # No more steps after connection
+                        enrollment.status = EnrollmentStatus.COMPLETED.value
+                        enrollment.completed_at = datetime.utcnow()
+                        if sequence:
+                            sequence.completed_count = (sequence.completed_count or 0) + 1
+                            sequence.active_enrolled = max(0, (sequence.active_enrolled or 0) - 1)
+                        lead.active_sequence_id = None
 
                 connected_count += 1
                 db.commit()
@@ -413,12 +479,16 @@ async def detect_replies(db: Session):
     Check for inbound messages from enrolled leads and auto-exit from sequence.
     Called every 5 minutes (offset from connection detection).
     """
-    # Find active enrollments where lead has a chat_id
+    # Find active CLASSIC enrollments where lead has a chat_id
+    # Exclude smart_pipeline enrollments (handled by pipeline_scheduler.py)
     active = db.query(SequenceEnrollment).join(
         Lead, SequenceEnrollment.lead_id == Lead.id
+    ).join(
+        Sequence, SequenceEnrollment.sequence_id == Sequence.id
     ).filter(
         SequenceEnrollment.status == EnrollmentStatus.ACTIVE.value,
-        Lead.linkedin_chat_id.isnot(None)
+        Lead.linkedin_chat_id.isnot(None),
+        Sequence.sequence_mode != SequenceMode.SMART_PIPELINE.value,
     ).all()
 
     if not active:

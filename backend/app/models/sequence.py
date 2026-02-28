@@ -19,10 +19,25 @@ class SequenceStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class SequenceMode(str, Enum):
+    """Whether a sequence uses classic timer-based steps or smart pipeline."""
+    CLASSIC = "classic"
+    SMART_PIPELINE = "smart_pipeline"
+
+
 class StepType(str, Enum):
     """Type of sequence step."""
     CONNECTION_REQUEST = "connection_request"
     FOLLOW_UP_MESSAGE = "follow_up_message"
+
+
+class PipelinePhase(str, Enum):
+    """5-phase smart outreach pipeline phases."""
+    APERTURA = "apertura"              # Phase 1: Opening question, no pitch
+    CALIFICACION = "calificacion"      # Phase 2: Qualification questions
+    VALOR = "valor"                    # Phase 3: Value proposition / fit check
+    NURTURE = "nurture"                # Phase 4: Long-term light touch
+    REACTIVACION = "reactivacion"      # Phase 5: Reactivation after silence
 
 
 class EnrollmentStatus(str, Enum):
@@ -33,6 +48,7 @@ class EnrollmentStatus(str, Enum):
     PAUSED = "paused"
     FAILED = "failed"
     WITHDRAWN = "withdrawn"
+    PARKED = "parked"  # Lead parked after exhausting nurture/reactivation
 
 
 class Sequence(Base):
@@ -53,6 +69,9 @@ class Sequence(Base):
 
     # Strategy for message generation
     message_strategy = Column(String(20), default="hybrid")  # hybrid/direct/gradual
+
+    # Pipeline mode: "classic" = timer-based steps, "smart_pipeline" = response-based 5-phase
+    sequence_mode = Column(String(20), default=SequenceMode.CLASSIC.value)
 
     # Stats (denormalized for performance)
     total_enrolled = Column(Integer, default=0)
@@ -142,6 +161,17 @@ class SequenceEnrollment(Base):
     completed_at = Column(DateTime, nullable=True)
     failed_reason = Column(Text, nullable=True)
 
+    # Smart Pipeline phase tracking (nullable for backward compat with classic mode)
+    current_phase = Column(String(20), nullable=True)       # PipelinePhase value
+    phase_entered_at = Column(DateTime, nullable=True)       # When current phase started
+    last_response_at = Column(DateTime, nullable=True)       # When lead last responded
+    last_response_text = Column(Text, nullable=True)         # Last inbound message text
+    phase_analysis = Column(Text, nullable=True)             # JSON: Claude's analysis result
+    messages_in_phase = Column(Integer, default=0)           # Messages sent in current phase
+    nurture_count = Column(Integer, default=0)               # Total nurture messages sent
+    reactivation_count = Column(Integer, default=0)          # Times reactivated
+    total_messages_sent = Column(Integer, default=0)         # Total outbound messages
+
     # Multi-tenancy
     user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
 
@@ -169,5 +199,20 @@ class SequenceEnrollment(Base):
         messages[str(step_order)] = message
         self.messages_sent = json.dumps(messages)
 
+    def get_phase_analysis(self) -> dict:
+        """Get phase analysis dict from JSON."""
+        if self.phase_analysis:
+            try:
+                return json.loads(self.phase_analysis)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+
+    def store_phase_analysis(self, analysis: dict):
+        """Store Claude's phase analysis as JSON."""
+        self.phase_analysis = json.dumps(analysis)
+
     def __repr__(self):
+        if self.current_phase:
+            return f"<SequenceEnrollment lead={self.lead_id} phase={self.current_phase} ({self.status})>"
         return f"<SequenceEnrollment lead={self.lead_id} step={self.current_step_order} ({self.status})>"

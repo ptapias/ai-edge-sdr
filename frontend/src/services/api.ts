@@ -757,6 +757,9 @@ export interface SequenceStep {
   updated_at: string
 }
 
+export type SequenceMode = 'classic' | 'smart_pipeline'
+export type PipelinePhase = 'apertura' | 'calificacion' | 'valor' | 'nurture' | 'reactivacion'
+
 export interface Sequence {
   id: string
   name: string
@@ -764,6 +767,7 @@ export interface Sequence {
   status: 'draft' | 'active' | 'paused' | 'archived'
   business_id: string | null
   message_strategy: 'hybrid' | 'direct' | 'gradual'
+  sequence_mode: SequenceMode
   total_enrolled: number
   active_enrolled: number
   completed_count: number
@@ -780,6 +784,7 @@ export interface SequenceListItem {
   description: string | null
   status: string
   message_strategy: string
+  sequence_mode: SequenceMode
   total_enrolled: number
   active_enrolled: number
   completed_count: number
@@ -807,11 +812,20 @@ export interface SequenceEnrollment {
   lead_job_title: string | null
   lead_status: string | null
   lead_score_label: string | null
+  // Smart Pipeline fields
+  current_phase: PipelinePhase | null
+  phase_entered_at: string | null
+  last_response_at: string | null
+  messages_in_phase: number
+  nurture_count: number
+  reactivation_count: number
+  total_messages_sent: number
 }
 
 export interface SequenceStats {
   sequence_id: string
   sequence_name: string
+  sequence_mode: SequenceMode
   total_enrolled: number
   active: number
   completed: number
@@ -819,6 +833,7 @@ export interface SequenceStats {
   failed: number
   paused: number
   withdrawn: number
+  parked: number
   reply_rate: number
   completion_rate: number
   steps_breakdown: Array<{
@@ -827,6 +842,17 @@ export interface SequenceStats {
     reached: number
     completed: number
   }>
+  phase_breakdown: {
+    awaiting_connection: number
+    apertura: number
+    calificacion: number
+    valor: number
+    nurture: number
+    reactivacion: number
+    meeting: number
+    parked: number
+    exited: number
+  } | null
 }
 
 export interface SequenceDashboard {
@@ -845,6 +871,7 @@ export interface SequenceCreateData {
   description?: string
   business_id?: string
   message_strategy?: string
+  sequence_mode?: SequenceMode
   steps?: Array<{
     step_type: string
     delay_days: number

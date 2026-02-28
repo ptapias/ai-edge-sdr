@@ -10,7 +10,8 @@ import {
   Pause,
   Clock,
   XCircle,
-  Filter
+  Filter,
+  ParkingCircle
 } from 'lucide-react'
 import { getEnrollments, unenrollLeads } from '../../services/api'
 import type { SequenceEnrollment } from '../../services/api'
@@ -18,6 +19,7 @@ import type { SequenceEnrollment } from '../../services/api'
 interface EnrollmentTableProps {
   sequenceId: string
   isActive: boolean
+  isPipeline?: boolean
 }
 
 const statusConfig: Record<string, { label: string; icon: typeof CheckCircle2; color: string; bg: string }> = {
@@ -27,6 +29,15 @@ const statusConfig: Record<string, { label: string; icon: typeof CheckCircle2; c
   paused: { label: 'Paused', icon: Pause, color: 'text-gray-700', bg: 'bg-gray-100' },
   failed: { label: 'Failed', icon: AlertCircle, color: 'text-red-700', bg: 'bg-red-100' },
   withdrawn: { label: 'Withdrawn', icon: XCircle, color: 'text-gray-500', bg: 'bg-gray-50' },
+  parked: { label: 'Parked', icon: ParkingCircle, color: 'text-gray-600', bg: 'bg-gray-100' },
+}
+
+const phaseConfig: Record<string, { label: string; color: string; bg: string }> = {
+  apertura: { label: 'Apertura', color: 'text-indigo-700', bg: 'bg-indigo-100' },
+  calificacion: { label: 'Calificación', color: 'text-violet-700', bg: 'bg-violet-100' },
+  valor: { label: 'Valor', color: 'text-purple-700', bg: 'bg-purple-100' },
+  nurture: { label: 'Nurture', color: 'text-amber-700', bg: 'bg-amber-100' },
+  reactivacion: { label: 'Reactivación', color: 'text-orange-700', bg: 'bg-orange-100' },
 }
 
 function formatDate(dateString: string | null | undefined) {
@@ -64,7 +75,7 @@ function formatRelative(dateString: string | null | undefined) {
   return formatDate(dateString)
 }
 
-export default function EnrollmentTable({ sequenceId }: EnrollmentTableProps) {
+export default function EnrollmentTable({ sequenceId, isPipeline = false }: EnrollmentTableProps) {
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState('')
   const [selectedEnrollments, setSelectedEnrollments] = useState<Set<string>>(new Set())
@@ -136,6 +147,7 @@ export default function EnrollmentTable({ sequenceId }: EnrollmentTableProps) {
               <option value="paused">Paused</option>
               <option value="failed">Failed</option>
               <option value="withdrawn">Withdrawn</option>
+              {isPipeline && <option value="parked">Parked</option>}
             </select>
           </div>
           <span className="text-sm text-gray-500">
@@ -181,8 +193,15 @@ export default function EnrollmentTable({ sequenceId }: EnrollmentTableProps) {
                 </th>
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Lead</th>
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Step</th>
-                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Next Due</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">
+                  {isPipeline ? 'Phase' : 'Step'}
+                </th>
+                {isPipeline && (
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Last Response</th>
+                )}
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">
+                  {isPipeline ? 'Messages' : 'Next Due'}
+                </th>
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Enrolled</th>
               </tr>
             </thead>
@@ -191,6 +210,7 @@ export default function EnrollmentTable({ sequenceId }: EnrollmentTableProps) {
                 const config = statusConfig[enrollment.status] || statusConfig.active
                 const StatusIcon = config.icon
                 const canSelect = enrollment.status === 'active' || enrollment.status === 'paused'
+                const phase = enrollment.current_phase ? phaseConfig[enrollment.current_phase] : null
 
                 return (
                   <tr
@@ -234,14 +254,47 @@ export default function EnrollmentTable({ sequenceId }: EnrollmentTableProps) {
                       )}
                     </td>
                     <td className="px-4 py-2.5">
-                      <span className="text-sm text-gray-700">
-                        Step {enrollment.current_step_order}
-                      </span>
+                      {isPipeline && phase ? (
+                        <div>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${phase.bg} ${phase.color}`}>
+                            {phase.label}
+                          </span>
+                          {enrollment.messages_in_phase > 0 && (
+                            <span className="text-xs text-gray-400 ml-1">
+                              ({enrollment.messages_in_phase}/2 msgs)
+                            </span>
+                          )}
+                        </div>
+                      ) : isPipeline ? (
+                        <span className="text-xs text-gray-400">Awaiting connection</span>
+                      ) : (
+                        <span className="text-sm text-gray-700">
+                          Step {enrollment.current_step_order}
+                        </span>
+                      )}
                     </td>
+                    {isPipeline && (
+                      <td className="px-4 py-2.5">
+                        <span className="text-sm text-gray-600">
+                          {enrollment.last_response_at ? formatRelative(enrollment.last_response_at) : '-'}
+                        </span>
+                      </td>
+                    )}
                     <td className="px-4 py-2.5">
-                      <span className="text-sm text-gray-600">
-                        {enrollment.status === 'active' ? formatRelative(enrollment.next_step_due_at) : '-'}
-                      </span>
+                      {isPipeline ? (
+                        <span className="text-sm text-gray-600">
+                          {enrollment.total_messages_sent || 0}
+                          {enrollment.nurture_count > 0 && (
+                            <span className="text-xs text-amber-500 ml-1">
+                              ({enrollment.nurture_count} nurture)
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-sm text-gray-600">
+                          {enrollment.status === 'active' ? formatRelative(enrollment.next_step_due_at) : '-'}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
                       <span className="text-xs text-gray-500">

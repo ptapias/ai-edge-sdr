@@ -44,6 +44,7 @@ class SequenceCreate(BaseModel):
     description: Optional[str] = None
     business_id: Optional[str] = None
     message_strategy: str = Field("hybrid", pattern="^(hybrid|direct|gradual)$")
+    sequence_mode: str = Field("classic", pattern="^(classic|smart_pipeline)$")
     steps: List[SequenceStepCreate] = []
 
 
@@ -65,6 +66,7 @@ class SequenceResponse(BaseModel):
     status: str
     business_id: Optional[str] = None
     message_strategy: str
+    sequence_mode: str = "classic"
     total_enrolled: int
     active_enrolled: int
     completed_count: int
@@ -84,6 +86,7 @@ class SequenceListResponse(BaseModel):
     description: Optional[str] = None
     status: str
     message_strategy: str
+    sequence_mode: str = "classic"
     total_enrolled: int
     active_enrolled: int
     completed_count: int
@@ -125,6 +128,14 @@ class EnrollmentResponse(BaseModel):
     lead_job_title: Optional[str] = None
     lead_status: Optional[str] = None
     lead_score_label: Optional[str] = None
+    # Smart Pipeline fields
+    current_phase: Optional[str] = None
+    phase_entered_at: Optional[datetime] = None
+    last_response_at: Optional[datetime] = None
+    messages_in_phase: int = 0
+    nurture_count: int = 0
+    reactivation_count: int = 0
+    total_messages_sent: int = 0
 
     class Config:
         from_attributes = True
@@ -135,6 +146,7 @@ class EnrollmentResponse(BaseModel):
 class SequenceStatsResponse(BaseModel):
     sequence_id: str
     sequence_name: str
+    sequence_mode: str = "classic"
     total_enrolled: int
     active: int
     completed: int
@@ -142,9 +154,11 @@ class SequenceStatsResponse(BaseModel):
     failed: int
     paused: int
     withdrawn: int
+    parked: int = 0
     reply_rate: float  # percentage
     completion_rate: float  # percentage
     steps_breakdown: List[dict]  # [{step_order, step_type, reached, completed}]
+    phase_breakdown: Optional[dict] = None  # Smart pipeline: {phase: count}
 
 
 class SequenceDashboardResponse(BaseModel):

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Send, MessageSquare } from 'lucide-react'
+import { Plus, Send, MessageSquare, Sparkles, ArrowDown, MessageCircle, RefreshCw, Heart, Target } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { addSequenceStep, updateSequenceStep, deleteSequenceStep } from '../../services/api'
 import type { Sequence } from '../../services/api'
@@ -9,10 +9,74 @@ interface SequenceBuilderProps {
   sequence: Sequence
 }
 
+// Phase configuration for the pipeline view
+const pipelinePhases = [
+  {
+    id: 'connection',
+    name: 'Connection Request',
+    description: 'AI sends a personalized connection request with a gradual/curiosity approach',
+    icon: Send,
+    borderColor: 'border-blue-200',
+    bgColor: 'bg-blue-50',
+    iconColor: 'text-blue-600',
+  },
+  {
+    id: 'apertura',
+    name: 'Phase 1: Apertura',
+    description: 'Genuine curiosity question about their work. No pitch, no product mention.',
+    icon: MessageCircle,
+    borderColor: 'border-indigo-200',
+    bgColor: 'bg-indigo-50',
+    iconColor: 'text-indigo-600',
+    trigger: 'Connection accepted',
+  },
+  {
+    id: 'calificacion',
+    name: 'Phase 2: Calificación',
+    description: 'Qualification questions to discover if they\'re in growth/investment mode.',
+    icon: Target,
+    borderColor: 'border-violet-200',
+    bgColor: 'bg-violet-50',
+    iconColor: 'text-violet-600',
+    trigger: 'Positive engagement',
+  },
+  {
+    id: 'valor',
+    name: 'Phase 3: Valor',
+    description: 'Connect their specific need with your newsletter sponsorship. First time product is mentioned.',
+    icon: Sparkles,
+    borderColor: 'border-purple-200',
+    bgColor: 'bg-purple-50',
+    iconColor: 'text-purple-600',
+    trigger: 'Growth signals detected',
+  },
+  {
+    id: 'nurture',
+    name: 'Phase 4: Nurture',
+    description: 'Light-touch every 6-8 weeks. Share value, no pressure. Max 4 touches.',
+    icon: Heart,
+    borderColor: 'border-amber-200',
+    bgColor: 'bg-amber-50',
+    iconColor: 'text-amber-600',
+    trigger: 'Not ready yet / Cold response',
+  },
+  {
+    id: 'reactivacion',
+    name: 'Phase 5: Reactivación',
+    description: 'Fresh angle after 30+ days of silence. Different approach to re-open conversation.',
+    icon: RefreshCw,
+    borderColor: 'border-orange-200',
+    bgColor: 'bg-orange-50',
+    iconColor: 'text-orange-600',
+    trigger: '30+ days no response',
+  },
+]
+
 export default function SequenceBuilder({ sequence }: SequenceBuilderProps) {
   const queryClient = useQueryClient()
   const [showAddStep, setShowAddStep] = useState(false)
   const isActive = sequence.status === 'active'
+  const isPipeline = sequence.sequence_mode === 'smart_pipeline'
 
   const addStepMutation = useMutation({
     mutationFn: (step: { step_type: string; delay_days: number; prompt_context?: string }) =>
@@ -56,6 +120,63 @@ export default function SequenceBuilder({ sequence }: SequenceBuilderProps) {
     }
   }
 
+  // Smart Pipeline view
+  if (isPipeline) {
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles className="w-5 h-5 text-purple-600" />
+          <h4 className="text-sm font-semibold text-gray-900">Smart Pipeline Phases</h4>
+          <span className="text-xs text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full">AI-driven</span>
+        </div>
+        <p className="text-xs text-gray-500 mb-4">
+          Phase advancement is based on the lead's response, not time elapsed. AI analyzes each reply and decides the next action.
+        </p>
+
+        <div className="relative">
+          {pipelinePhases.map((phase, index) => {
+            const Icon = phase.icon
+            return (
+              <div key={phase.id}>
+                <div className={`flex items-start gap-3 p-3 rounded-lg border ${phase.borderColor} ${phase.bgColor} mb-2`}>
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 bg-white border ${phase.borderColor}`}>
+                    <Icon className={`w-5 h-5 ${phase.iconColor}`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-gray-900">{phase.name}</p>
+                      {phase.trigger && (
+                        <span className="text-xs text-gray-400 italic">← {phase.trigger}</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-600 mt-0.5">{phase.description}</p>
+                  </div>
+                </div>
+
+                {index < pipelinePhases.length - 1 && (
+                  <div className="flex justify-center -my-1 mb-1">
+                    <ArrowDown className="w-4 h-4 text-gray-300" />
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+          <p className="text-xs font-medium text-gray-700 mb-1">Key rules:</p>
+          <ul className="text-xs text-gray-500 space-y-0.5">
+            <li>• Max 2 outbound messages per phase before forcing transition</li>
+            <li>• Max 4 nurture touches over ~24-32 weeks</li>
+            <li>• Max 1 reactivation attempt per lead</li>
+            <li>• Meeting intent → human takes over immediately</li>
+          </ul>
+        </div>
+      </div>
+    )
+  }
+
+  // Classic step builder (existing)
   const hasConnectionStep = sequence.steps.some(s => s.step_type === 'connection_request')
 
   return (

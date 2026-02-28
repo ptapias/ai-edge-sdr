@@ -781,3 +781,364 @@ Output ONLY the message text, nothing else. No quotes, no labels."""
         except Exception as e:
             logger.error(f"Failed to generate sequence follow-up: {e}")
             return f"Hi {contact_name}, wanted to follow up on our connection. Would love to hear your thoughts!"
+
+    # ──────────────────────────────────────────────────────────────
+    # Smart Pipeline Methods (5-phase response-driven outreach)
+    # ──────────────────────────────────────────────────────────────
+
+    def analyze_phase_response(
+        self,
+        conversation_history: str,
+        current_phase: str,
+        lead_data: dict,
+        sender_context: dict | None = None,
+        messages_in_phase: int = 0,
+    ) -> dict:
+        """
+        Core AI analysis engine for the smart pipeline.
+
+        Analyzes the lead's latest response in context of the current phase
+        and returns a structured decision on what to do next.
+
+        Args:
+            conversation_history: Full conversation formatted as "You: ... / Contact: ..."
+            current_phase: Current pipeline phase (apertura, calificacion, valor, nurture, reactivacion)
+            lead_data: Dict with first_name, job_title, company_name, company_industry
+            sender_context: Sender's business context (name, role, company, context)
+            messages_in_phase: Number of outbound messages already sent in this phase
+
+        Returns:
+            dict with keys: outcome, reason, sentiment, buying_signals,
+                  signal_strength, next_phase, suggested_angle
+        """
+        contact_name = lead_data.get("first_name", "the contact")
+        contact_title = lead_data.get("job_title", "professional")
+        contact_company = lead_data.get("company_name", "their company")
+        contact_industry = lead_data.get("company_industry", "")
+
+        sender_name = sender_context.get("sender_name", "") if sender_context else ""
+        sender_company = sender_context.get("sender_company", "") if sender_context else ""
+        sender_extra = sender_context.get("sender_context", "") if sender_context else ""
+
+        phase_rules = {
+            "apertura": """APERTURA (Phase 1 – Opening):
+- You sent a genuine curiosity question. No pitch was made.
+- ADVANCE to calificacion if: lead responds with engagement, asks back, shows willingness to chat, shares info about their work.
+- STAY if: lead responds briefly but not negatively (max 2 messages in this phase).
+- NURTURE if: lead responds coldly or dismissively but doesn't explicitly refuse.
+- EXIT if: lead explicitly says "not interested", "don't contact me", or similar rejection.""",
+
+            "calificacion": """CALIFICACION (Phase 2 – Qualification):
+- You asked a qualifying question about their business growth, marketing strategy, or investment plans.
+- ADVANCE to valor if: lead reveals growth signals (scaling, investing in marketing, launching campaigns, expanding audience, looking for visibility).
+- STAY if: lead engages but hasn't revealed growth signals yet (max 2 messages in this phase).
+- NURTURE if: lead says they're consolidating, cutting costs, not investing right now, or shows no growth signals.
+- PARK if: lead's business/industry has zero fit with newsletter sponsorship (completely different target audience).
+- EXIT if: explicit rejection.""",
+
+            "valor": """VALOR (Phase 3 – Value Proposition):
+- You connected their specific need with your newsletter sponsorship offering.
+- MEETING if: lead asks about pricing, wants details, suggests a call, asks for media kit, shows clear purchase intent.
+- STAY if: lead is interested but hasn't committed to next step yet (max 2 messages in this phase).
+- NURTURE if: lead says "not right now", "maybe later", "interesting but timing isn't right".
+- PARK if: lead explicitly declines the offering but remains polite.
+- EXIT if: explicit rejection or negative response.""",
+
+            "nurture": """NURTURE (Phase 4 – Long-term light touch):
+- You've been sending periodic check-ins every 6-8 weeks.
+- ADVANCE to calificacion if: lead re-engages with business discussion, mentions new projects, growth, or marketing plans.
+- ADVANCE to valor if: lead directly asks about your offering or shows purchase intent.
+- STAY if: lead responds neutrally (continue nurturing).
+- PARK if: no response after this touch and nurture count is high.
+- EXIT if: explicit rejection.""",
+
+            "reactivacion": """REACTIVACION (Phase 5 – Reactivation after 30+ days silence):
+- Lead went silent for 30+ days. You're re-opening with a fresh angle.
+- ADVANCE to calificacion if: lead re-engages positively, responds to the new angle.
+- NURTURE if: lead responds but is lukewarm.
+- PARK if: still no response.
+- EXIT if: explicit rejection.""",
+        }
+
+        phase_context = phase_rules.get(current_phase, phase_rules["apertura"])
+
+        system_prompt = f"""You are an AI sales development analyst evaluating a LinkedIn conversation.
+
+CONTEXT:
+- Sender: {sender_name} from {sender_company}
+  {sender_extra}
+- Contact: {contact_name}, {contact_title} at {contact_company} ({contact_industry})
+- Current phase: {current_phase.upper()}
+- Messages sent in this phase: {messages_in_phase}
+
+PHASE RULES:
+{phase_context}
+
+IMPORTANT CONSTRAINTS:
+- Maximum 2 outbound messages per phase. If messages_in_phase >= 2 and the lead hasn't given a clear positive signal, you MUST recommend NURTURE (not STAY).
+- Phase advancement is ALWAYS based on the lead's response content, never on time elapsed.
+- Be conservative with ADVANCE – the lead must show genuine interest or fit, not just politeness.
+- MEETING is only for clear next-step intent (pricing, call, details request).
+
+CONVERSATION HISTORY:
+{conversation_history}
+
+Analyze the lead's LATEST response and return a JSON object with EXACTLY these keys:
+- "outcome": one of "advance", "stay", "nurture", "park", "meeting", "exit"
+- "reason": 1-2 sentence explanation of your decision
+- "sentiment": one of "hot", "warm", "cold"
+- "buying_signals": array of detected signals (e.g. ["scaling marketing", "interested in visibility"]) or empty array
+- "signal_strength": one of "strong", "moderate", "weak", "none"
+- "next_phase": the phase to move to if advancing (e.g. "calificacion", "valor") or null if not advancing
+- "suggested_angle": brief guidance for the next message to send (1 sentence)
+
+Output ONLY valid JSON, no markdown formatting, no explanation outside the JSON."""
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=500,
+                system=system_prompt,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Analyze the latest response and provide your phase transition decision as JSON.",
+                    }
+                ],
+            )
+
+            raw = response.content[0].text.strip()
+            # Strip markdown code fences if present
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+                raw = raw.strip()
+
+            import json as _json
+            analysis = _json.loads(raw)
+
+            # Validate required keys
+            required = {"outcome", "reason", "sentiment", "buying_signals", "signal_strength", "next_phase", "suggested_angle"}
+            if not required.issubset(analysis.keys()):
+                missing = required - analysis.keys()
+                logger.warning(f"Phase analysis missing keys {missing}, using defaults")
+                for key in missing:
+                    analysis[key] = None if key != "buying_signals" else []
+
+            # Enforce max 2 messages per phase
+            if messages_in_phase >= 2 and analysis.get("outcome") == "stay":
+                logger.info(f"Overriding 'stay' → 'nurture' because messages_in_phase={messages_in_phase} >= 2")
+                analysis["outcome"] = "nurture"
+                analysis["reason"] = f"Max messages in phase reached ({messages_in_phase}). Moving to nurture."
+                analysis["next_phase"] = "nurture"
+
+            logger.info(
+                f"Phase analysis for {contact_name} ({current_phase}): "
+                f"outcome={analysis['outcome']}, sentiment={analysis.get('sentiment')}, "
+                f"signals={analysis.get('buying_signals')}"
+            )
+            return analysis
+
+        except Exception as e:
+            logger.error(f"Failed to analyze phase response: {e}")
+            # Safe fallback: stay in current phase
+            return {
+                "outcome": "stay",
+                "reason": f"Analysis failed: {str(e)}",
+                "sentiment": "warm",
+                "buying_signals": [],
+                "signal_strength": "none",
+                "next_phase": None,
+                "suggested_angle": "Continue the conversation naturally.",
+            }
+
+    def generate_phase_message(
+        self,
+        phase: str,
+        lead_data: dict,
+        sender_context: dict | None = None,
+        conversation_history: str = "",
+        phase_analysis: dict | None = None,
+        messages_in_phase: int = 0,
+    ) -> str:
+        """
+        Generate a phase-appropriate message for the smart pipeline.
+
+        Each phase has a distinct tone, goal, and constraint set.
+
+        Args:
+            phase: Pipeline phase (apertura, calificacion, valor, nurture, reactivacion)
+            lead_data: Dict with first_name, job_title, company_name, company_industry
+            sender_context: Sender's business context
+            conversation_history: Previous messages
+            phase_analysis: Claude's analysis result (for context on what angle to take)
+            messages_in_phase: How many messages already sent in this phase
+
+        Returns:
+            Generated message string
+        """
+        contact_name = lead_data.get("first_name", "there")
+        contact_title = lead_data.get("job_title", "professional")
+        contact_company = lead_data.get("company_name", "your company")
+        contact_industry = lead_data.get("company_industry", "")
+
+        sender_name = sender_context.get("sender_name", "") if sender_context else ""
+        sender_role = sender_context.get("sender_role", "") if sender_context else ""
+        sender_company = sender_context.get("sender_company", "") if sender_context else ""
+        sender_extra = sender_context.get("sender_context", "") if sender_context else ""
+
+        suggested_angle = ""
+        if phase_analysis and phase_analysis.get("suggested_angle"):
+            suggested_angle = f"\nSUGGESTED ANGLE: {phase_analysis['suggested_angle']}"
+
+        # Phase-specific prompt configurations
+        phase_prompts = {
+            "apertura": {
+                "goal": "Get a genuine response. Ask a curiosity-driven question about their work, industry, or a recent trend.",
+                "tone": "Curious, genuine, peer-to-peer. Like a fellow professional who finds their work interesting.",
+                "rules": [
+                    "Do NOT mention your company, product, newsletter, or anything you sell",
+                    "Do NOT pitch or hint at a pitch",
+                    "Ask ONE specific question about their work, role, industry challenge, or a trend you noticed",
+                    "Reference something specific about them (title, company, industry) to show genuine interest",
+                    "Keep it to 2-3 sentences maximum",
+                    "Sound like a real human, not a bot or sales rep",
+                    "If this is message 2, acknowledge their response and ask a natural follow-up",
+                ],
+                "max_chars": 300,
+                "mentions_offering": False,
+            },
+            "calificacion": {
+                "goal": "Discover if they're in growth/investment mode. Ask about their business priorities, marketing plans, or growth strategy.",
+                "tone": "Conversational, insightful. Like a peer sharing industry knowledge.",
+                "rules": [
+                    "Do NOT mention your company, product, or offering yet",
+                    "Ask a question that naturally reveals if they're investing in growth/marketing/visibility",
+                    "Frame it around industry trends or shared challenges",
+                    "Keep it to 2-3 sentences maximum",
+                    "Build on the conversation history naturally",
+                    "If this is message 2, try a different angle to qualify them",
+                ],
+                "max_chars": 350,
+                "mentions_offering": False,
+            },
+            "valor": {
+                "goal": "Connect their specific need/pain point with your newsletter sponsorship offering. Make it relevant to THEM.",
+                "tone": "Direct but not pushy. Consultative, showing how you can specifically help them.",
+                "rules": [
+                    "NOW you can mention your newsletter (AI Edge) and its audience (30K+ AI/tech professionals)",
+                    "Connect THEIR specific need (from conversation) with what your newsletter sponsorship offers",
+                    "Be specific about the value: targeted audience, engagement rates, decision-maker reach",
+                    "Include a clear but soft call to action (e.g., 'happy to share our media kit', 'worth a quick chat?')",
+                    "Keep it to 3-5 sentences maximum",
+                    "Do NOT be generic – reference what THEY told you about their needs",
+                    "If this is message 2, address any hesitation and add a new value angle",
+                ],
+                "max_chars": 500,
+                "mentions_offering": True,
+            },
+            "nurture": {
+                "goal": "Maintain the relationship with a light touch. Share something valuable, no pressure.",
+                "tone": "Friendly, brief, zero pressure. Like a colleague sharing something interesting.",
+                "rules": [
+                    "Do NOT pitch or sell anything",
+                    "Share a brief insight, congratulate on something, or ask a light question",
+                    "Keep it to 1-2 sentences maximum",
+                    "Feel natural and human, not automated",
+                    "Vary the approach – don't repeat the same format",
+                    "Reference something from your previous conversation if possible",
+                ],
+                "max_chars": 200,
+                "mentions_offering": False,
+            },
+            "reactivacion": {
+                "goal": "Re-open a conversation that went silent 30+ days ago with a fresh angle.",
+                "tone": "Direct, fresh, low-pressure. Acknowledge the gap without being awkward.",
+                "rules": [
+                    "Do NOT say 'just following up' or 'checking in' – use a fresh angle",
+                    "Try a new approach: share a relevant insight, ask about a recent change, or reference an industry event",
+                    "Keep it to 2-3 sentences maximum",
+                    "Make it easy for them to respond (ask a simple question)",
+                    "You MAY briefly mention your offering if the previous conversation reached valor phase",
+                    "Sound natural, not desperate",
+                ],
+                "max_chars": 300,
+                "mentions_offering": False,  # unless previous conversation reached valor
+            },
+        }
+
+        phase_config = phase_prompts.get(phase, phase_prompts["apertura"])
+
+        rules_text = "\n".join(f"- {r}" for r in phase_config["rules"])
+
+        system_prompt = f"""You are {sender_name}, {sender_role} at {sender_company}.
+{sender_extra}
+
+You are writing a LinkedIn message to {contact_name}, {contact_title} at {contact_company} ({contact_industry}).
+
+PHASE: {phase.upper()}
+GOAL: {phase_config['goal']}
+TONE: {phase_config['tone']}
+MESSAGE NUMBER IN THIS PHASE: {messages_in_phase + 1}
+
+RULES:
+{rules_text}
+- MAXIMUM {phase_config['max_chars']} characters
+- Write in the SAME LANGUAGE as the conversation (if they wrote in Spanish, respond in Spanish; if English, respond in English)
+- Output ONLY the message text. No quotes, no labels, no explanation.
+{suggested_angle}
+
+{f'CONVERSATION SO FAR:{chr(10)}{conversation_history}' if conversation_history else ''}"""
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=400,
+                system=system_prompt,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"Write the {phase} phase message for {contact_name} ({contact_title} at {contact_company}).",
+                    }
+                ],
+            )
+
+            message = response.content[0].text.strip()
+            # Remove wrapping quotes
+            if message.startswith('"') and message.endswith('"'):
+                message = message[1:-1]
+
+            # Enforce character limit
+            max_chars = phase_config["max_chars"]
+            if len(message) > max_chars + 50:  # Small tolerance
+                logger.warning(
+                    f"Phase message too long ({len(message)} chars, max {max_chars}). Truncating."
+                )
+                # Try to cut at last sentence boundary
+                truncated = message[:max_chars]
+                last_period = truncated.rfind(".")
+                last_question = truncated.rfind("?")
+                cut_point = max(last_period, last_question)
+                if cut_point > max_chars * 0.5:
+                    message = truncated[: cut_point + 1]
+                else:
+                    message = truncated
+
+            logger.info(
+                f"Generated {phase} phase message for {contact_name}: "
+                f"{len(message)} chars, msg #{messages_in_phase + 1}"
+            )
+            return message
+
+        except Exception as e:
+            logger.error(f"Failed to generate {phase} phase message: {e}")
+            # Minimal fallback per phase
+            fallbacks = {
+                "apertura": f"Hi {contact_name}, I noticed your work at {contact_company} — what's been the biggest shift in your industry lately?",
+                "calificacion": f"That's interesting, {contact_name}. What are your biggest priorities for growth this year?",
+                "valor": f"{contact_name}, based on what you've shared, I think our AI Edge newsletter (30K+ subscribers) could help with visibility. Worth a quick chat?",
+                "nurture": f"Hi {contact_name}, hope things are going well at {contact_company}!",
+                "reactivacion": f"Hi {contact_name}, been a while! Curious how things have evolved at {contact_company}.",
+            }
+            return fallbacks.get(phase, f"Hi {contact_name}, how are things going?")
