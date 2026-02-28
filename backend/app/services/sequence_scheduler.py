@@ -101,14 +101,15 @@ async def process_sequence_actions(db: Session):
     now = datetime.utcnow()
 
     # Find enrollments where next_step_due_at <= now AND status = active
-    # Exclude smart_pipeline enrollments (handled by pipeline_scheduler.py)
+    # Note: smart_pipeline enrollments ARE included here for step 1 (connection request).
+    # After the connection request is sent, next_step_due_at=None prevents re-processing.
+    # Post-connection phases are handled by pipeline_scheduler.py.
     due_enrollments = db.query(SequenceEnrollment).join(
         Sequence, SequenceEnrollment.sequence_id == Sequence.id
     ).filter(
         SequenceEnrollment.status == EnrollmentStatus.ACTIVE.value,
         SequenceEnrollment.next_step_due_at.isnot(None),
         SequenceEnrollment.next_step_due_at <= now,
-        Sequence.sequence_mode != SequenceMode.SMART_PIPELINE.value,
     ).limit(5).all()  # Process max 5 per tick to avoid overload
 
     for enrollment in due_enrollments:
