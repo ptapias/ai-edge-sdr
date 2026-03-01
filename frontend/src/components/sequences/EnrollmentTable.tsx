@@ -11,10 +11,14 @@ import {
   Clock,
   XCircle,
   Filter,
-  ParkingCircle
+  ParkingCircle,
+  Flame,
+  Thermometer,
+  Snowflake,
 } from 'lucide-react'
 import { getEnrollments, unenrollLeads } from '../../services/api'
 import type { SequenceEnrollment } from '../../services/api'
+import EnrollmentDetailModal from './EnrollmentDetailModal'
 
 interface EnrollmentTableProps {
   sequenceId: string
@@ -75,10 +79,17 @@ function formatRelative(dateString: string | null | undefined) {
   return formatDate(dateString)
 }
 
+const sentimentConfig: Record<string, { label: string; icon: typeof Flame; color: string; bg: string }> = {
+  hot: { label: 'Hot', icon: Flame, color: 'text-red-600', bg: 'bg-red-50' },
+  warm: { label: 'Warm', icon: Thermometer, color: 'text-amber-600', bg: 'bg-amber-50' },
+  cold: { label: 'Cold', icon: Snowflake, color: 'text-blue-600', bg: 'bg-blue-50' },
+}
+
 export default function EnrollmentTable({ sequenceId, isPipeline = false }: EnrollmentTableProps) {
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState('')
   const [selectedEnrollments, setSelectedEnrollments] = useState<Set<string>>(new Set())
+  const [selectedDetailId, setSelectedDetailId] = useState<string | null>(null)
 
   const { data: enrollments, isLoading } = useQuery({
     queryKey: ['enrollments', sequenceId, statusFilter],
@@ -193,6 +204,9 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
                 </th>
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Lead</th>
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                {isPipeline && (
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Temp</th>
+                )}
                 <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">
                   {isPipeline ? 'Phase' : 'Step'}
                 </th>
@@ -215,11 +229,12 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
                 return (
                   <tr
                     key={enrollment.id}
-                    className={`hover:bg-gray-50 ${
+                    onClick={() => setSelectedDetailId(enrollment.id)}
+                    className={`hover:bg-gray-50 cursor-pointer ${
                       selectedEnrollments.has(enrollment.lead_id) ? 'bg-blue-50' : ''
                     } ${enrollment.status === 'replied' ? 'bg-orange-50/50' : ''}`}
                   >
-                    <td className="px-4 py-2.5">
+                    <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                       {canSelect && (
                         <input
                           type="checkbox"
@@ -253,6 +268,22 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
                         </p>
                       )}
                     </td>
+                    {isPipeline && (
+                      <td className="px-4 py-2.5">
+                        {enrollment.lead_sentiment_level && sentimentConfig[enrollment.lead_sentiment_level] ? (() => {
+                          const sc = sentimentConfig[enrollment.lead_sentiment_level!]
+                          const SentIcon = sc.icon
+                          return (
+                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium ${sc.bg} ${sc.color}`}>
+                              <SentIcon className="w-3 h-3" />
+                              {sc.label}
+                            </span>
+                          )
+                        })() : (
+                          <span className="text-xs text-gray-300">-</span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-4 py-2.5">
                       {isPipeline && phase ? (
                         <div>
@@ -307,6 +338,15 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Enrollment Detail Modal */}
+      {selectedDetailId && (
+        <EnrollmentDetailModal
+          sequenceId={sequenceId}
+          enrollmentId={selectedDetailId}
+          onClose={() => setSelectedDetailId(null)}
+        />
       )}
     </div>
   )

@@ -21,7 +21,8 @@ from ..schemas.sequence import (
     SequenceStepCreate, SequenceStepUpdate, StepReorderRequest,
     EnrollLeadsRequest, UnenrollLeadsRequest,
     SequenceResponse, SequenceListResponse, SequenceStepResponse,
-    EnrollmentResponse, SequenceStatsResponse, SequenceDashboardResponse,
+    EnrollmentResponse, EnrollmentDetailResponse,
+    SequenceStatsResponse, SequenceDashboardResponse,
 )
 
 router = APIRouter(prefix="/api/sequences", tags=["sequences"])
@@ -593,9 +594,91 @@ async def list_enrollments(
             nurture_count=e.nurture_count or 0,
             reactivation_count=e.reactivation_count or 0,
             total_messages_sent=e.total_messages_sent or 0,
+            # Lead intelligence
+            lead_sentiment_level=lead.sentiment_level if lead else None,
+            lead_signal_strength=lead.signal_strength if lead else None,
         ))
 
     return result
+
+
+@router.get("/{sequence_id}/enrollments/{enrollment_id}", response_model=EnrollmentDetailResponse)
+async def get_enrollment_detail(
+    sequence_id: str,
+    enrollment_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get detailed view of a single enrollment with message history and AI analysis."""
+    import json as _json
+
+    sequence = db.query(Sequence).filter(
+        Sequence.id == sequence_id,
+        Sequence.user_id == current_user.id
+    ).first()
+    if not sequence:
+        raise HTTPException(status_code=404, detail="Sequence not found")
+
+    enrollment = db.query(SequenceEnrollment).filter(
+        SequenceEnrollment.id == enrollment_id,
+        SequenceEnrollment.sequence_id == sequence_id
+    ).first()
+    if not enrollment:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+
+    lead = db.query(Lead).filter(Lead.id == enrollment.lead_id).first()
+
+    # Build message history from messages_sent JSON
+    messages = []
+    sent_messages = enrollment.get_messages()
+    for key, msg_text in sent_messages.items():
+        messages.append({"key": key, "message_text": msg_text})
+
+    # Get phase analysis
+    phase_analysis = enrollment.get_phase_analysis()
+
+    # Parse lead buying signals from JSON
+    buying_signals = []
+    if lead and lead.buying_signals:
+        try:
+            buying_signals = _json.loads(lead.buying_signals)
+        except (ValueError, TypeError):
+            buying_signals = []
+
+    return EnrollmentDetailResponse(
+        id=enrollment.id,
+        sequence_id=enrollment.sequence_id,
+        lead_id=enrollment.lead_id,
+        status=enrollment.status,
+        current_step_order=enrollment.current_step_order,
+        next_step_due_at=enrollment.next_step_due_at,
+        last_step_completed_at=enrollment.last_step_completed_at,
+        replied_at=enrollment.replied_at,
+        completed_at=enrollment.completed_at,
+        failed_reason=enrollment.failed_reason,
+        enrolled_at=enrollment.enrolled_at,
+        updated_at=enrollment.updated_at,
+        lead_name=lead.display_name if lead else None,
+        lead_company=lead.company_name if lead else None,
+        lead_job_title=lead.job_title if lead else None,
+        lead_status=lead.status if lead else None,
+        lead_score_label=lead.score_label if lead else None,
+        current_phase=enrollment.current_phase,
+        phase_entered_at=enrollment.phase_entered_at,
+        last_response_at=enrollment.last_response_at,
+        messages_in_phase=enrollment.messages_in_phase or 0,
+        nurture_count=enrollment.nurture_count or 0,
+        reactivation_count=enrollment.reactivation_count or 0,
+        total_messages_sent=enrollment.total_messages_sent or 0,
+        lead_sentiment_level=lead.sentiment_level if lead else None,
+        lead_signal_strength=lead.signal_strength if lead else None,
+        # Detail-only fields
+        messages=messages,
+        phase_analysis=phase_analysis,
+        last_response_text=enrollment.last_response_text,
+        lead_buying_signals=buying_signals,
+        lead_priority_score=lead.priority_score if lead else None,
+    )
 
 
 # ─── Stats ───────────────────────────────────────────────────────────────────

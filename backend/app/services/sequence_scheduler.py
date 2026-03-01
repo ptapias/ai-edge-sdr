@@ -343,11 +343,12 @@ async def detect_connection_changes(db: Session):
     user_id = next(iter(user_ids))
     unipile = _get_user_unipile_service(db, user_id)
     try:
-        chats_result = await unipile.get_chats(limit=100, force_refresh=True)
+        chats_result = await unipile.get_chats(limit=100)
     except Exception as e:
         logger.error(f"[Sequence] Failed to fetch chats for connection detection: {e}")
         return
 
+    logger.info(f"[Sequence] Connection check - from_cache: {chats_result.get('from_cache', False)}")
     if not chats_result.get("success"):
         return
 
@@ -528,7 +529,7 @@ async def detect_replies(db: Session):
                 continue
 
             # Check latest messages
-            msg_result = await unipile.get_chat_messages(lead.linkedin_chat_id, limit=5, force_refresh=True)
+            msg_result = await unipile.get_chat_messages(lead.linkedin_chat_id, limit=5)
             if not msg_result.get("success"):
                 continue
 

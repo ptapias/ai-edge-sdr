@@ -145,9 +145,9 @@ async def detect_pipeline_replies(db: Session):
             # Get Unipile service for this user
             unipile = _get_user_unipile_service(db, enrollment.user_id)
 
-            # Fetch latest messages
+            # Fetch latest messages (cache-aware, ~5-10 min TTL)
             msg_result = await unipile.get_chat_messages(
-                lead.linkedin_chat_id, limit=20, force_refresh=True
+                lead.linkedin_chat_id, limit=20
             )
             if not msg_result.get("success"):
                 continue

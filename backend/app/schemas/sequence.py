@@ -136,9 +136,21 @@ class EnrollmentResponse(BaseModel):
     nurture_count: int = 0
     reactivation_count: int = 0
     total_messages_sent: int = 0
+    # Lead intelligence (from Lead model)
+    lead_sentiment_level: Optional[str] = None
+    lead_signal_strength: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class EnrollmentDetailResponse(EnrollmentResponse):
+    """Extended enrollment response with full message history and AI analysis."""
+    messages: List[dict] = []            # [{key, message_text}]
+    phase_analysis: Optional[dict] = None  # Claude's analysis JSON
+    last_response_text: Optional[str] = None
+    lead_buying_signals: List[str] = []
+    lead_priority_score: Optional[int] = None
 
 
 # --- Stats schemas ---

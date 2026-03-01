@@ -820,6 +820,17 @@ export interface SequenceEnrollment {
   nurture_count: number
   reactivation_count: number
   total_messages_sent: number
+  // Lead intelligence
+  lead_sentiment_level: string | null
+  lead_signal_strength: string | null
+}
+
+export interface EnrollmentDetail extends SequenceEnrollment {
+  messages: Array<{ key: string; message_text: string }>
+  phase_analysis: Record<string, unknown> | null
+  last_response_text: string | null
+  lead_buying_signals: string[]
+  lead_priority_score: number | null
 }
 
 export interface SequenceStats {
@@ -955,6 +966,11 @@ export const unenrollLeads = async (sequenceId: string, leadIds: string[]) => {
 export const getEnrollments = async (sequenceId: string, status?: string): Promise<SequenceEnrollment[]> => {
   const params = status ? `?status=${status}` : ''
   const response = await api.get(`/sequences/${sequenceId}/enrollments${params}`)
+  return response.data
+}
+
+export const getEnrollmentDetail = async (sequenceId: string, enrollmentId: string): Promise<EnrollmentDetail> => {
+  const response = await api.get(`/sequences/${sequenceId}/enrollments/${enrollmentId}`)
   return response.data
 }
 

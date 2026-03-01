@@ -149,18 +149,30 @@ async def scheduler_loop():
     Main scheduler loop that runs in the background.
     Multi-phase loop processing invitations and sequence steps.
 
-    Phase 1 (every tick / 30s): Send automatic invitations
-    Phase 2 (every tick / 30s): Process due sequence actions
-    Phase 3 (every 10 ticks / ~5min): Detect connection acceptances
-    Phase 4 (every 10 ticks / ~5min, offset): Detect replies
+    Phase 1 (every tick / 30s): Send automatic invitations + process due sequence actions
+    Phase 2 (~30 min + jitter): Detect connection acceptances via Unipile
+    Phase 3 (~30 min + jitter, offset ~15 min from Phase 2): Detect replies (classic)
+    Phase 4 (~30 min + jitter, offset ~20 min from Phase 2): Smart pipeline reply detection + time-based phases
+
+    IMPORTANT: Phases 2-4 use randomized intervals (27-32 min) to simulate human behavior
+    and avoid LinkedIn detection patterns. Each phase fires independently with its own jitter.
     """
     global _scheduler_running
     from .sequence_scheduler import process_sequence_actions, detect_connection_changes, detect_replies
     from .pipeline_scheduler import detect_pipeline_replies, process_time_based_phases
 
     logger.info("[Scheduler] Starting combined scheduler (invitations + sequences + pipeline)")
+    logger.info("[Scheduler] LinkedIn safety: polling every ~30 min with random jitter")
 
     tick_count = 0
+
+    # Dynamic tick targets with jitter for human-like behavior
+    # Each phase fires independently at ~30 min intervals with ±2.5 min variation
+    # Initial offsets stagger the phases to avoid burst API calls
+    next_connection_tick = random.randint(55, 65)     # First check at ~27-32 min
+    next_reply_tick = random.randint(25, 35)           # Offset ~15 min from connections
+    next_pipeline_tick = random.randint(40, 50)        # Offset ~20 min from connections
+
     while _scheduler_running:
         try:
             # Create a new database session for each iteration
@@ -173,29 +185,34 @@ async def scheduler_loop():
                 elif result.get("reason") not in ["Automation disabled", "Outside working hours", "No eligible leads"]:
                     logger.debug(f"[Scheduler] Not sending: {result.get('reason')}")
 
-                # Phase 2: Process sequence actions (connection requests + follow-ups)
+                # Phase 1b: Process sequence actions (connection requests + follow-ups)
                 try:
                     await process_sequence_actions(db)
                 except Exception as e:
                     logger.error(f"[Scheduler] Error in sequence actions: {e}")
 
-                # Phase 3: Detect connection acceptances (every ~5 min)
-                if tick_count % 10 == 0:
+                # Phase 2: Detect connection acceptances (~30 min + jitter)
+                if tick_count >= next_connection_tick:
                     try:
+                        logger.info(f"[Scheduler] Running connection detection (tick {tick_count})")
                         await detect_connection_changes(db)
                     except Exception as e:
                         logger.error(f"[Scheduler] Error detecting connections: {e}")
+                    next_connection_tick = tick_count + random.randint(55, 65)
 
-                # Phase 4: Detect replies (every ~5 min, offset from Phase 3)
-                if tick_count % 10 == 5:
+                # Phase 3: Detect replies - classic sequences (~30 min + jitter)
+                if tick_count >= next_reply_tick:
                     try:
+                        logger.info(f"[Scheduler] Running reply detection (tick {tick_count})")
                         await detect_replies(db)
                     except Exception as e:
                         logger.error(f"[Scheduler] Error detecting replies: {e}")
+                    next_reply_tick = tick_count + random.randint(55, 65)
 
-                # Phase 5: Smart pipeline processing (every ~5 min, offset from Phase 3 & 4)
-                if tick_count % 10 == 3:
+                # Phase 4: Smart pipeline processing (~30 min + jitter)
+                if tick_count >= next_pipeline_tick:
                     try:
+                        logger.info(f"[Scheduler] Running pipeline detection (tick {tick_count})")
                         await detect_pipeline_replies(db)
                     except Exception as e:
                         logger.error(f"[Scheduler] Error in pipeline reply detection: {e}")
@@ -203,6 +220,7 @@ async def scheduler_loop():
                         await process_time_based_phases(db)
                     except Exception as e:
                         logger.error(f"[Scheduler] Error in pipeline time-based phases: {e}")
+                    next_pipeline_tick = tick_count + random.randint(55, 65)
 
                 tick_count += 1
             finally:
