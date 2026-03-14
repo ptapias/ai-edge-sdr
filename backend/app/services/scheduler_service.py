@@ -290,8 +290,8 @@ async def scheduler_loop():
 
     Phase 1 (every tick / 30s): Send automatic invitations
     Phase 2 (every tick / 30s): Process due sequence actions
-    Phase 3 (every 10 ticks / ~5min): Detect connection acceptances
-    Phase 4 (every 10 ticks / ~5min, offset): Detect replies
+    Phase 3 (every ~60 ticks / ~30min): Detect connection acceptances
+    Phase 4 (every ~60 ticks / ~30min, offset): Detect replies
     """
     global _scheduler_running
     from .sequence_scheduler import process_sequence_actions, detect_connection_changes, detect_replies
@@ -316,7 +316,7 @@ async def scheduler_loop():
                     reason = result.get("reason", "")
                     if "Scheduler paused" in reason:
                         # Log pause message less frequently (every 10 ticks)
-                        if tick_count % 10 == 0:
+                        if tick_count % 60 == 0:
                             logger.info(f"[Scheduler] {reason}")
                     else:
                         logger.debug(f"[Scheduler] Not sending: {reason}")
@@ -327,15 +327,15 @@ async def scheduler_loop():
                 except Exception as e:
                     logger.error(f"[Scheduler] Error in sequence actions: {e}")
 
-                # Phase 3: Detect connection acceptances (every ~5 min)
-                if tick_count % 10 == 0:
+                # Phase 3: Detect connection acceptances (every ~30 min)
+                if tick_count % 60 == 0:
                     try:
                         await detect_connection_changes(db)
                     except Exception as e:
                         logger.error(f"[Scheduler] Error detecting connections: {e}")
 
-                # Phase 4: Detect replies (every ~5 min, offset from Phase 3)
-                if tick_count % 10 == 5:
+                # Phase 4: Detect replies (every ~30 min, offset from Phase 3)
+                if tick_count % 60 == 30:
                     try:
                         await detect_replies(db)
                     except Exception as e:
@@ -348,7 +348,8 @@ async def scheduler_loop():
             logger.error(f"[Scheduler] Error in scheduler loop: {e}")
 
         # Wait 30 seconds before next check
-        await asyncio.sleep(30)
+        # Jitter: 25-35s to avoid fixed-interval patterns (LinkedIn best practice)
+        await asyncio.sleep(25 + random.random() * 10)
 
     logger.info("[Scheduler] Scheduler stopped")
 

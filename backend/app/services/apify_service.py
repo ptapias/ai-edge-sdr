@@ -43,13 +43,13 @@ class ApifyService:
         if filters.contact_seniority:
             actor_input["contact_seniority"] = filters.contact_seniority
         if filters.contact_location:
-            actor_input["contact_location"] = filters.contact_location
+            actor_input["contact_location"] = [loc.lower() for loc in filters.contact_location]
         if filters.company_industry:
-            actor_input["company_industry"] = filters.company_industry
+            actor_input["company_industry"] = [ind.lower() for ind in filters.company_industry]
         if filters.company_size:
             actor_input["company_size"] = filters.company_size
         if filters.company_location:
-            actor_input["company_location"] = filters.company_location
+            actor_input["company_location"] = [loc.lower() for loc in filters.company_location]
 
         logger.info(f"Starting Apify actor: {self.actor_id}")
         logger.info(f"Actor input: {actor_input}")
