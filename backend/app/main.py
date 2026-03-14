@@ -30,6 +30,7 @@ from .routers.csv_import import router as csv_import_router
 from .routers.analytics import router as analytics_router
 from .routers.intelligence import router as intelligence_router
 from .routers.sequences import router as sequences_router
+from .routers.webhooks import router as webhooks_router
 
 # Configure logging
 logging.basicConfig(
@@ -100,6 +101,7 @@ app.include_router(csv_import_router)
 app.include_router(analytics_router)
 app.include_router(intelligence_router)
 app.include_router(sequences_router)
+app.include_router(webhooks_router)
 
 
 @app.get("/api")
