@@ -172,6 +172,12 @@ class SequenceEnrollment(Base):
     reactivation_count = Column(Integer, default=0)          # Times reactivated
     total_messages_sent = Column(Integer, default=0)         # Total outbound messages
 
+    # Retry tracking for failed steps
+    step_attempts = Column(Integer, default=0)
+    step_last_error = Column(Text, nullable=True)
+    step_error_category = Column(String(50), nullable=True)
+    step_next_retry_at = Column(DateTime, nullable=True)
+
     # Multi-tenancy
     user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
 

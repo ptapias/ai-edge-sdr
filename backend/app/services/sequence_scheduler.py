@@ -5,42 +5,36 @@ Handles:
 1. Executing due sequence actions (connection requests + follow-ups)
 2. Detecting connection acceptances via Unipile chat polling
 3. Detecting replies and auto-exiting leads from sequences
+
+CRITICAL: Includes error classification and exponential backoff to prevent
+infinite retry loops that could ban the LinkedIn account.
 """
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..models import Lead, AutomationSettings, InvitationLog, Campaign
 from ..models.lead import LeadStatus
-from ..models.user import LinkedInAccount
 from ..models.sequence import (
     Sequence, SequenceStep, SequenceEnrollment,
-    SequenceStatus, StepType, EnrollmentStatus,
-    SequenceMode, PipelinePhase
+    SequenceStatus, StepType, EnrollmentStatus
 )
-from .unipile_service import UnipileService
+from .unipile_service import (
+    UnipileService,
+    InvitationErrorCategory,
+    PERMANENT_ERRORS,
+    GLOBAL_PAUSE_ERRORS,
+)
 from .claude_service import ClaudeService
-from .encryption_service import get_encryption_service
+from .scheduler_service import _handle_invitation_failure, _calculate_backoff_minutes, MAX_INVITATION_ATTEMPTS
 
 logger = logging.getLogger(__name__)
 
-
-def _get_user_unipile_service(db: Session, user_id: str) -> UnipileService:
-    """Get UnipileService with user's credentials if available, else default."""
-    linkedin_account = db.query(LinkedInAccount).filter(
-        LinkedInAccount.user_id == user_id,
-        LinkedInAccount.is_connected == True
-    ).first()
-
-    if linkedin_account and linkedin_account.unipile_api_key_encrypted:
-        encryption_service = get_encryption_service()
-        api_key = encryption_service.decrypt(linkedin_account.unipile_api_key_encrypted)
-        account_id = linkedin_account.unipile_account_id
-        return UnipileService(api_key=api_key, account_id=account_id)
-    else:
-        return UnipileService()
+# Max step retry attempts for sequence enrollments
+MAX_STEP_ATTEMPTS = 5
 
 
 def _get_business_context(db: Session, business_id: Optional[str]) -> dict:
@@ -93,6 +87,78 @@ def _format_conversation(messages_data: dict) -> str:
     return "\n".join(lines[-10:])  # Last 10 messages
 
 
+def _handle_enrollment_failure(
+    enrollment: SequenceEnrollment,
+    lead: Lead,
+    sequence: Sequence,
+    settings: Optional[AutomationSettings],
+    result: dict,
+    db: Session,
+    step_type: str = "connection_request",
+):
+    """
+    Handle a failed sequence step with proper error classification and backoff.
+    Prevents infinite retry loops for sequence actions.
+    """
+    error_msg = result.get("error", "Unknown error")
+    error_category_str = result.get("error_category", InvitationErrorCategory.UNKNOWN.value)
+    error_category = InvitationErrorCategory(error_category_str)
+
+    # Update enrollment retry tracking
+    enrollment.step_attempts = (enrollment.step_attempts or 0) + 1
+    enrollment.step_last_error = (error_msg or "Unknown error")[:500]
+    enrollment.step_error_category = error_category_str
+
+    if error_category in PERMANENT_ERRORS:
+        # Permanent failure - fail the enrollment
+        enrollment.status = EnrollmentStatus.FAILED.value
+        enrollment.failed_reason = f"Permanent error: {error_category_str} - {error_msg[:200]}"
+        enrollment.next_step_due_at = None
+        sequence.active_enrolled = max(0, (sequence.active_enrolled or 0) - 1)
+        lead.active_sequence_id = None
+        logger.warning(
+            f"[Sequence] PERMANENT failure for {lead.display_name} in '{sequence.name}': "
+            f"{error_category_str} - {error_msg[:100]}"
+        )
+
+    elif error_category in GLOBAL_PAUSE_ERRORS:
+        # Global rate limit - pause the enrollment and trigger global pause
+        pause_hours = 24
+        enrollment.next_step_due_at = datetime.utcnow() + timedelta(hours=pause_hours)
+        enrollment.step_next_retry_at = enrollment.next_step_due_at
+
+        # Also trigger global pause via the settings if available
+        if settings:
+            _handle_invitation_failure(lead, settings, error_msg, error_category, db, "Sequence")
+        logger.error(
+            f"[Sequence] GLOBAL PAUSE triggered by {lead.display_name} in '{sequence.name}': "
+            f"{error_category_str}"
+        )
+
+    else:
+        # Temporary failure - exponential backoff
+        attempts = enrollment.step_attempts or 1
+        backoff_minutes = _calculate_backoff_minutes(attempts)
+        enrollment.next_step_due_at = datetime.utcnow() + timedelta(minutes=backoff_minutes)
+        enrollment.step_next_retry_at = enrollment.next_step_due_at
+        logger.warning(
+            f"[Sequence] Temporary failure for {lead.display_name} in '{sequence.name}': "
+            f"{error_category_str} - retry in {backoff_minutes}min (attempt {attempts}/{MAX_STEP_ATTEMPTS})"
+        )
+
+    # Max retries exhausted
+    if (enrollment.step_attempts or 0) >= MAX_STEP_ATTEMPTS and enrollment.status != EnrollmentStatus.FAILED.value:
+        enrollment.status = EnrollmentStatus.FAILED.value
+        enrollment.failed_reason = f"Max retries ({MAX_STEP_ATTEMPTS}) reached for {step_type}: {error_msg[:200]}"
+        enrollment.next_step_due_at = None
+        sequence.active_enrolled = max(0, (sequence.active_enrolled or 0) - 1)
+        lead.active_sequence_id = None
+        logger.error(
+            f"[Sequence] MAX RETRIES ({MAX_STEP_ATTEMPTS}) reached for {lead.display_name} "
+            f"in '{sequence.name}' - failing enrollment"
+        )
+
+
 async def process_sequence_actions(db: Session):
     """
     Process all due sequence actions across all users.
@@ -101,19 +167,17 @@ async def process_sequence_actions(db: Session):
     now = datetime.utcnow()
 
     # Find enrollments where next_step_due_at <= now AND status = active
-    # Note: smart_pipeline enrollments ARE included here for step 1 (connection request).
-    # After the connection request is sent, next_step_due_at=None prevents re-processing.
-    # Post-connection phases are handled by pipeline_scheduler.py.
-    due_enrollments = db.query(SequenceEnrollment).join(
-        Sequence, SequenceEnrollment.sequence_id == Sequence.id
-    ).filter(
+    # Also exclude enrollments in step retry backoff
+    due_enrollments = db.query(SequenceEnrollment).filter(
         SequenceEnrollment.status == EnrollmentStatus.ACTIVE.value,
         SequenceEnrollment.next_step_due_at.isnot(None),
         SequenceEnrollment.next_step_due_at <= now,
+        # Exclude enrollments in retry backoff
+        or_(
+            SequenceEnrollment.step_next_retry_at.is_(None),
+            SequenceEnrollment.step_next_retry_at <= now,
+        ),
     ).limit(5).all()  # Process max 5 per tick to avoid overload
-
-    if due_enrollments:
-        logger.info(f"[Sequence] Found {len(due_enrollments)} due enrollments to process")
 
     for enrollment in due_enrollments:
         try:
@@ -128,6 +192,10 @@ async def process_sequence_actions(db: Session):
 
             if settings and not settings.is_working_hour():
                 continue  # Respect working hours
+
+            # Check global pause
+            if settings and settings.is_globally_paused():
+                continue
 
             # Get the current step
             current_step = db.query(SequenceStep).filter(
@@ -193,12 +261,13 @@ async def _execute_connection_request(
 
     message = claude.generate_linkedin_message(lead_data, sender_context, sequence.message_strategy)
 
-    # Send via Unipile (use per-user credentials)
-    unipile = _get_user_unipile_service(db, enrollment.user_id)
+    # Send via Unipile
+    unipile = UnipileService()
     result = await unipile.send_invitation_by_url(lead.linkedin_url, message)
 
     # Log the invitation attempt
     campaign = db.query(Campaign).filter(Campaign.id == lead.campaign_id).first() if lead.campaign_id else None
+    error_category_str = result.get("error_category") if not result.get("success") else None
     log = InvitationLog(
         user_id=enrollment.user_id,
         lead_id=lead.id,
@@ -211,6 +280,7 @@ async def _execute_connection_request(
         campaign_name=campaign.name if campaign else None,
         success=result.get("success", False),
         error_message=result.get("error") if not result.get("success") else None,
+        error_category=error_category_str,
         mode="automatic"
     )
     db.add(log)
@@ -220,11 +290,21 @@ async def _execute_connection_request(
         lead.status = LeadStatus.INVITATION_SENT.value
         lead.connection_sent_at = datetime.utcnow()
         lead.linkedin_message = message
+        # Reset invitation retry tracking
+        lead.invitation_attempts = 0
+        lead.invitation_last_error = None
+        lead.invitation_error_category = None
+        lead.invitation_next_retry_at = None
 
         # Update enrollment - now waiting for connection acceptance
         enrollment.last_step_completed_at = datetime.utcnow()
         enrollment.next_step_due_at = None  # Will be set when connection detected
         enrollment.store_message(step.step_order, message)
+        # Reset step retry tracking
+        enrollment.step_attempts = 0
+        enrollment.step_last_error = None
+        enrollment.step_error_category = None
+        enrollment.step_next_retry_at = None
 
         # Update automation settings counter
         if settings:
@@ -234,8 +314,9 @@ async def _execute_connection_request(
         db.commit()
         logger.info(f"[Sequence] Connection request sent to {lead.display_name} (sequence: {sequence.name})")
     else:
-        logger.warning(f"[Sequence] Connection request failed for {lead.display_name}: {result.get('error')}")
-        db.commit()  # Still commit the log
+        # CRITICAL: Handle failure with proper classification, backoff, and pause
+        _handle_enrollment_failure(enrollment, lead, sequence, settings, result, db, "connection_request")
+        db.commit()
 
 
 async def _execute_follow_up(
@@ -247,16 +328,12 @@ async def _execute_follow_up(
     settings: Optional[AutomationSettings]
 ):
     """Send a follow-up message (post-connection)."""
-    # Respect working hours for follow-up messages
-    if settings and not settings.is_working_hour():
-        return  # Will retry next tick
-
     if not lead.linkedin_chat_id:
         # Can't send without chat ID; skip for now, connection detection will handle this
         return
 
-    # Get conversation history for context (use per-user credentials)
-    unipile = _get_user_unipile_service(db, enrollment.user_id)
+    # Get conversation history for context
+    unipile = UnipileService()
     try:
         chat_result = await unipile.get_chat_messages(lead.linkedin_chat_id, limit=20)
         conversation_history = _format_conversation(chat_result.get("data", {})) if chat_result.get("success") else ""
@@ -290,6 +367,11 @@ async def _execute_follow_up(
         enrollment.store_message(step.step_order, message)
         enrollment.last_step_completed_at = datetime.utcnow()
         enrollment.current_step_order += 1
+        # Reset step retry tracking for the next step
+        enrollment.step_attempts = 0
+        enrollment.step_last_error = None
+        enrollment.step_error_category = None
+        enrollment.step_next_retry_at = None
 
         # Check if there's a next step
         next_step = db.query(SequenceStep).filter(
@@ -312,16 +394,22 @@ async def _execute_follow_up(
         db.commit()
         logger.info(f"[Sequence] Follow-up step {step.step_order} sent to {lead.display_name} (sequence: {sequence.name})")
     else:
-        logger.warning(f"[Sequence] Follow-up failed for {lead.display_name}: {result.get('error')}")
+        # CRITICAL: Handle failure with proper classification and backoff
+        _handle_enrollment_failure(enrollment, lead, sequence, settings, result, db, "follow_up")
+        db.commit()
 
 
 async def detect_connection_changes(db: Session):
     """
-    Poll Unipile chats to detect accepted connections for enrolled leads.
+    Poll Unipile chats to detect accepted connections.
     Called every 5 minutes from the main scheduler loop.
+
+    Checks BOTH:
+    1. Sequence-enrolled leads waiting for connection acceptance
+    2. Non-sequence leads with status invitation_sent (manual/auto invitations)
     """
-    # Find enrollments waiting for connection acceptance
-    waiting = db.query(SequenceEnrollment).join(
+    # Find sequence enrollments waiting for connection acceptance
+    waiting_enrollments = db.query(SequenceEnrollment).join(
         Lead, SequenceEnrollment.lead_id == Lead.id
     ).filter(
         SequenceEnrollment.status == EnrollmentStatus.ACTIVE.value,
@@ -329,26 +417,33 @@ async def detect_connection_changes(db: Session):
         SequenceEnrollment.next_step_due_at.is_(None)  # Waiting for connection
     ).all()
 
-    if not waiting:
+    # Find non-sequence leads with invitation_sent status
+    enrolled_lead_ids = [e.lead_id for e in waiting_enrollments]
+    standalone_query = db.query(Lead).filter(
+        Lead.status == LeadStatus.INVITATION_SENT.value,
+        Lead.linkedin_url.isnot(None),
+    )
+    if enrolled_lead_ids:
+        standalone_query = standalone_query.filter(~Lead.id.in_(enrolled_lead_ids))
+    standalone_leads = standalone_query.all()
+
+    total_to_check = len(waiting_enrollments) + len(standalone_leads)
+    if total_to_check == 0:
         return
 
-    logger.info(f"[Sequence] Checking connection status for {len(waiting)} enrolled leads")
+    logger.info(
+        f"[ConnectionDetect] Checking connection status for "
+        f"{len(waiting_enrollments)} enrolled + {len(standalone_leads)} standalone leads"
+    )
 
-    # Group enrollments by user_id to use per-user credentials
-    user_ids = set(e.user_id for e in waiting if e.user_id)
-    if not user_ids:
-        return
-
-    # Use first user's credentials (typically single-user system)
-    user_id = next(iter(user_ids))
-    unipile = _get_user_unipile_service(db, user_id)
+    # Make one Unipile API call to get chats
+    unipile = UnipileService()
     try:
-        chats_result = await unipile.get_chats(limit=100)
+        chats_result = await unipile.get_chats(limit=100, force_refresh=True)
     except Exception as e:
-        logger.error(f"[Sequence] Failed to fetch chats for connection detection: {e}")
+        logger.error(f"[ConnectionDetect] Failed to fetch chats: {e}")
         return
 
-    logger.info(f"[Sequence] Connection check - from_cache: {chats_result.get('from_cache', False)}")
     if not chats_result.get("success"):
         return
 
@@ -365,20 +460,19 @@ async def detect_connection_changes(db: Session):
             if pid:
                 chat_lookup[pid.lower()] = chat.get("id")
 
-    # Check each waiting enrollment
     connected_count = 0
-    for enrollment in waiting:
+
+    # --- Phase A: Check sequence-enrolled leads ---
+    for enrollment in waiting_enrollments:
         try:
             lead = db.query(Lead).filter(Lead.id == enrollment.lead_id).first()
             if not lead or not lead.linkedin_url:
                 continue
 
-            # Extract provider_id from lead's LinkedIn URL
             provider_id = unipile._extract_provider_id(lead.linkedin_url)
             if not provider_id:
                 continue
 
-            # Check if this lead appears in chats (= connected)
             chat_id = chat_lookup.get(provider_id.lower())
             if chat_id:
                 # Connection accepted!
@@ -386,112 +480,66 @@ async def detect_connection_changes(db: Session):
                 lead.connected_at = datetime.utcnow()
                 lead.linkedin_chat_id = chat_id
 
-                # Check if this is a smart_pipeline sequence
-                sequence = db.query(Sequence).filter(Sequence.id == enrollment.sequence_id).first()
-                is_pipeline = sequence and sequence.sequence_mode == SequenceMode.SMART_PIPELINE.value
+                # Advance enrollment to next step
+                enrollment.current_step_order += 1
+                enrollment.last_step_completed_at = datetime.utcnow()
+                enrollment.step_attempts = 0
+                enrollment.step_last_error = None
+                enrollment.step_error_category = None
+                enrollment.step_next_retry_at = None
 
-                if is_pipeline:
-                    # Smart Pipeline: initialize APERTURA phase
-                    enrollment.current_phase = PipelinePhase.APERTURA.value
-                    enrollment.phase_entered_at = datetime.utcnow()
-                    enrollment.messages_in_phase = 0
-                    enrollment.last_step_completed_at = datetime.utcnow()
-                    enrollment.next_step_due_at = None  # Pipeline uses reply-based, not timer
+                next_step = db.query(SequenceStep).filter(
+                    SequenceStep.sequence_id == enrollment.sequence_id,
+                    SequenceStep.step_order == enrollment.current_step_order
+                ).first()
 
-                    # Respect working hours - defer apertura message if outside hours
-                    user_settings = db.query(AutomationSettings).filter(
-                        AutomationSettings.user_id == enrollment.user_id
-                    ).first()
-                    if user_settings and not user_settings.is_working_hour():
-                        # Connection is recorded, but apertura msg will be sent
-                        # by pipeline_scheduler on next tick inside working hours
-                        enrollment.next_step_due_at = datetime.utcnow()  # Signal to pipeline scheduler
-                        logger.info(
-                            f"[Sequence] Connection detected for {lead.display_name} (pipeline), "
-                            f"apertura deferred - outside working hours"
-                        )
-                    else:
-                        # Generate and send the first apertura message immediately
-                        try:
-                            from .pipeline_scheduler import (
-                                _get_business_context as _pb_ctx,
-                                _get_lead_data as _pl_data,
-                                _format_conversation,
-                            )
-                            sender_ctx = _pb_ctx(db, sequence.business_id)
-                            lead_d = _pl_data(lead)
-
-                            # Get conversation history (the connection request message)
-                            try:
-                                chat_result = await unipile.get_chat_messages(chat_id, limit=10)
-                                conv_history = _format_conversation(
-                                    chat_result.get("data", {})
-                                ) if chat_result.get("success") else ""
-                            except Exception:
-                                conv_history = ""
-
-                            claude = ClaudeService()
-                            apertura_msg = claude.generate_phase_message(
-                                phase=PipelinePhase.APERTURA.value,
-                                lead_data=lead_d,
-                                sender_context=sender_ctx,
-                                conversation_history=conv_history,
-                                messages_in_phase=0,
-                            )
-
-                            send_result = await unipile.send_message(chat_id, apertura_msg)
-                            if send_result.get("success"):
-                                enrollment.messages_in_phase = 1
-                                enrollment.total_messages_sent = (enrollment.total_messages_sent or 0) + 1
-                                enrollment.store_message("pipeline_apertura_1", apertura_msg)
-                                lead.last_message_at = datetime.utcnow()
-                                lead.status = LeadStatus.IN_CONVERSATION.value
-                                logger.info(
-                                    f"[Sequence] Pipeline APERTURA message sent to {lead.display_name} "
-                                    f"on connection acceptance"
-                                )
-                            else:
-                                logger.warning(
-                                    f"[Sequence] Failed to send apertura message to {lead.display_name}: "
-                                    f"{send_result.get('error')}"
-                                )
-                        except Exception as e:
-                            logger.error(f"[Sequence] Error sending apertura on connection: {e}")
-
+                if next_step:
+                    enrollment.next_step_due_at = datetime.utcnow() + timedelta(days=next_step.delay_days)
+                    logger.info(
+                        f"[ConnectionDetect] Enrolled lead {lead.display_name} connected, "
+                        f"next step in {next_step.delay_days} days"
+                    )
                 else:
-                    # Classic mode: advance enrollment to next step
-                    enrollment.current_step_order += 1
-                    enrollment.last_step_completed_at = datetime.utcnow()
-
-                    next_step = db.query(SequenceStep).filter(
-                        SequenceStep.sequence_id == enrollment.sequence_id,
-                        SequenceStep.step_order == enrollment.current_step_order
-                    ).first()
-
-                    if next_step:
-                        enrollment.next_step_due_at = datetime.utcnow() + timedelta(days=next_step.delay_days)
-                        logger.info(
-                            f"[Sequence] Connection detected for {lead.display_name}, "
-                            f"next step in {next_step.delay_days} days"
-                        )
-                    else:
-                        # No more steps after connection
-                        enrollment.status = EnrollmentStatus.COMPLETED.value
-                        enrollment.completed_at = datetime.utcnow()
-                        if sequence:
-                            sequence.completed_count = (sequence.completed_count or 0) + 1
-                            sequence.active_enrolled = max(0, (sequence.active_enrolled or 0) - 1)
-                        lead.active_sequence_id = None
+                    enrollment.status = EnrollmentStatus.COMPLETED.value
+                    enrollment.completed_at = datetime.utcnow()
+                    sequence = db.query(Sequence).filter(Sequence.id == enrollment.sequence_id).first()
+                    if sequence:
+                        sequence.completed_count = (sequence.completed_count or 0) + 1
+                        sequence.active_enrolled = max(0, (sequence.active_enrolled or 0) - 1)
+                    lead.active_sequence_id = None
 
                 connected_count += 1
                 db.commit()
 
         except Exception as e:
-            logger.error(f"[Sequence] Error checking connection for enrollment {enrollment.id}: {e}")
+            logger.error(f"[ConnectionDetect] Error checking enrollment {enrollment.id}: {e}")
+            continue
+
+    # --- Phase B: Check standalone (non-sequence) leads ---
+    for lead in standalone_leads:
+        try:
+            if not lead.linkedin_url:
+                continue
+
+            provider_id = unipile._extract_provider_id(lead.linkedin_url)
+            if not provider_id:
+                continue
+
+            chat_id = chat_lookup.get(provider_id.lower())
+            if chat_id:
+                lead.status = LeadStatus.CONNECTED.value
+                lead.connected_at = datetime.utcnow()
+                lead.linkedin_chat_id = chat_id
+                connected_count += 1
+                db.commit()
+                logger.info(f"[ConnectionDetect] Standalone lead {lead.display_name} connected")
+
+        except Exception as e:
+            logger.error(f"[ConnectionDetect] Error checking standalone lead {lead.id}: {e}")
             continue
 
     if connected_count > 0:
-        logger.info(f"[Sequence] Detected {connected_count} new connections")
+        logger.info(f"[ConnectionDetect] Detected {connected_count} new connections total")
 
 
 async def detect_replies(db: Session):
@@ -499,16 +547,12 @@ async def detect_replies(db: Session):
     Check for inbound messages from enrolled leads and auto-exit from sequence.
     Called every 5 minutes (offset from connection detection).
     """
-    # Find active CLASSIC enrollments where lead has a chat_id
-    # Exclude smart_pipeline enrollments (handled by pipeline_scheduler.py)
+    # Find active enrollments where lead has a chat_id
     active = db.query(SequenceEnrollment).join(
         Lead, SequenceEnrollment.lead_id == Lead.id
-    ).join(
-        Sequence, SequenceEnrollment.sequence_id == Sequence.id
     ).filter(
         SequenceEnrollment.status == EnrollmentStatus.ACTIVE.value,
-        Lead.linkedin_chat_id.isnot(None),
-        Sequence.sequence_mode != SequenceMode.SMART_PIPELINE.value,
+        Lead.linkedin_chat_id.isnot(None)
     ).all()
 
     if not active:
@@ -516,10 +560,7 @@ async def detect_replies(db: Session):
 
     logger.info(f"[Sequence] Checking replies for {len(active)} active enrollments")
 
-    # Use per-user credentials
-    user_ids = set(e.user_id for e in active if e.user_id)
-    user_id = next(iter(user_ids)) if user_ids else None
-    unipile = _get_user_unipile_service(db, user_id) if user_id else UnipileService()
+    unipile = UnipileService()
     replied_count = 0
 
     for enrollment in active:
@@ -529,7 +570,7 @@ async def detect_replies(db: Session):
                 continue
 
             # Check latest messages
-            msg_result = await unipile.get_chat_messages(lead.linkedin_chat_id, limit=5)
+            msg_result = await unipile.get_chat_messages(lead.linkedin_chat_id, limit=5, force_refresh=True)
             if not msg_result.get("success"):
                 continue
 

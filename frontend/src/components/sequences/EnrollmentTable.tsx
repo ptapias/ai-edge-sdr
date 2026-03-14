@@ -290,7 +290,7 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${phase.bg} ${phase.color}`}>
                             {phase.label}
                           </span>
-                          {enrollment.messages_in_phase > 0 && (
+                          {(enrollment.messages_in_phase ?? 0) > 0 && (
                             <span className="text-xs text-gray-400 ml-1">
                               ({enrollment.messages_in_phase}/2 msgs)
                             </span>
@@ -315,7 +315,7 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
                       {isPipeline ? (
                         <span className="text-sm text-gray-600">
                           {enrollment.total_messages_sent || 0}
-                          {enrollment.nurture_count > 0 && (
+                          {(enrollment.nurture_count ?? 0) > 0 && (
                             <span className="text-xs text-amber-500 ml-1">
                               ({enrollment.nurture_count} nurture)
                             </span>

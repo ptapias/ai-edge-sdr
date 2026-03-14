@@ -1,0 +1,38 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: linkedin-ai-sdr
+    ports:
+      - "9000:8000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: sdr-postgres
+    environment:
+      POSTGRES_USER: sdr
+      POSTGRES_PASSWORD: sdr_secure_2026
+      POSTGRES_DB: linkedin_sdr
+    volumes:
+      - sdr-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sdr -d linkedin_sdr"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  sdr-pgdata:

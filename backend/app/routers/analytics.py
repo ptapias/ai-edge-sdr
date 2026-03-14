@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case
+from sqlalchemy import func, case, cast, Date
 
 from ..database import get_db
 from ..dependencies import get_current_user
@@ -148,7 +148,7 @@ def get_response_tracking(
     avg_time_query = (
         db.query(
             func.avg(
-                func.julianday(Lead.connected_at) - func.julianday(Lead.connection_sent_at)
+                func.extract("epoch", Lead.connected_at - Lead.connection_sent_at) / 86400
             )
         )
         .filter(
@@ -191,7 +191,7 @@ def get_activity_timeline(
     # Invitation logs by day
     invitation_data = (
         db.query(
-            func.date(InvitationLog.sent_at).label("date"),
+            cast(InvitationLog.sent_at, Date).label("date"),
             func.count(InvitationLog.id).label("invitations"),
             func.sum(case((InvitationLog.success == True, 1), else_=0)).label("successful"),
         )
@@ -199,7 +199,7 @@ def get_activity_timeline(
             InvitationLog.user_id == current_user.id,
             InvitationLog.sent_at >= start_date,
         )
-        .group_by(func.date(InvitationLog.sent_at))
+        .group_by(cast(InvitationLog.sent_at, Date))
         .all()
     )
 
@@ -213,7 +213,7 @@ def get_activity_timeline(
     # Connections by day
     connection_data = (
         db.query(
-            func.date(Lead.connected_at).label("date"),
+            cast(Lead.connected_at, Date).label("date"),
             func.count(Lead.id).label("connections"),
         )
         .filter(
@@ -221,7 +221,7 @@ def get_activity_timeline(
             Lead.connected_at.isnot(None),
             Lead.connected_at >= start_date,
         )
-        .group_by(func.date(Lead.connected_at))
+        .group_by(cast(Lead.connected_at, Date))
         .all()
     )
 

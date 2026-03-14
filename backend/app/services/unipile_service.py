@@ -8,7 +8,8 @@ CRITICAL: Uses caching to prevent excessive API calls and LinkedIn bans.
 """
 import logging
 import re
-from typing import Dict, Any, Optional, List
+from enum import Enum
+from typing import Dict, Any, Optional, List, Set
 import httpx
 
 from ..config import get_settings
@@ -16,6 +17,93 @@ from .cache_service import get_unipile_cache
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+# ============================================================
+# Error Classification for Invitation Retry Logic
+# ============================================================
+
+class InvitationErrorCategory(str, Enum):
+    """Classification of invitation failure reasons for retry logic."""
+    RATE_LIMIT_DAILY = "rate_limit_daily"       # Daily invitation limit reached
+    RATE_LIMIT_WEEKLY = "rate_limit_weekly"      # Weekly invitation limit reached
+    RATE_LIMIT_RESEND = "rate_limit_resend"      # "Cannot resend yet" / provider limit
+    INVALID_PROFILE = "invalid_profile"          # Profile not found, deleted
+    ALREADY_CONNECTED = "already_connected"      # Already connected to this person
+    ALREADY_INVITED = "already_invited"          # Pending invitation exists
+    ACCOUNT_RESTRICTED = "account_restricted"    # LinkedIn account restricted/suspended
+    NETWORK_ERROR = "network_error"              # Timeout, DNS, connection refused
+    UNKNOWN = "unknown"                          # Unclassified error
+
+
+# Errors that should never be retried (lead marked as failed immediately)
+PERMANENT_ERRORS: Set[InvitationErrorCategory] = {
+    InvitationErrorCategory.INVALID_PROFILE,
+    InvitationErrorCategory.ALREADY_CONNECTED,
+    InvitationErrorCategory.ALREADY_INVITED,
+}
+
+# Errors that should pause the ENTIRE scheduler (not just this lead)
+GLOBAL_PAUSE_ERRORS: Set[InvitationErrorCategory] = {
+    InvitationErrorCategory.RATE_LIMIT_DAILY,
+    InvitationErrorCategory.RATE_LIMIT_WEEKLY,
+    InvitationErrorCategory.RATE_LIMIT_RESEND,  # "Cannot resend yet / provider limit" = global limit
+    InvitationErrorCategory.ACCOUNT_RESTRICTED,
+}
+
+
+def classify_invitation_error(error_text: str, status_code: int = 0) -> InvitationErrorCategory:
+    """
+    Classify an error response from Unipile into a category for retry logic.
+
+    Args:
+        error_text: The error message from Unipile API
+        status_code: The HTTP status code
+
+    Returns:
+        InvitationErrorCategory for determining retry behavior
+    """
+    if not error_text:
+        return InvitationErrorCategory.UNKNOWN
+
+    error_lower = error_text.lower()
+
+    # Rate limit patterns (check most specific first)
+    if "cannot resend yet" in error_lower or "provider limit" in error_lower:
+        # "Cannot resend yet - You have reached a temporary provider limit"
+        if "weekly" in error_lower or "week" in error_lower:
+            return InvitationErrorCategory.RATE_LIMIT_WEEKLY
+        return InvitationErrorCategory.RATE_LIMIT_RESEND
+    if "weekly" in error_lower and "limit" in error_lower:
+        return InvitationErrorCategory.RATE_LIMIT_WEEKLY
+    if "daily" in error_lower and "limit" in error_lower:
+        return InvitationErrorCategory.RATE_LIMIT_DAILY
+    if status_code == 429:
+        return InvitationErrorCategory.RATE_LIMIT_DAILY
+
+    # Profile problems
+    if any(kw in error_lower for kw in ["not found", "does not exist", "invalid profile", "profile unavailable"]):
+        return InvitationErrorCategory.INVALID_PROFILE
+    if status_code == 404:
+        return InvitationErrorCategory.INVALID_PROFILE
+    if "already connected" in error_lower:
+        return InvitationErrorCategory.ALREADY_CONNECTED
+    if "already" in error_lower and ("invitation" in error_lower or "invited" in error_lower or "pending" in error_lower):
+        return InvitationErrorCategory.ALREADY_INVITED
+
+    # Account problems
+    if any(kw in error_lower for kw in ["blocked", "restricted", "suspended", "banned"]):
+        return InvitationErrorCategory.ACCOUNT_RESTRICTED
+
+    # Network errors
+    if any(kw in error_lower for kw in ["timeout", "timed out", "connection refused", "dns", "unreachable", "connecterror"]):
+        return InvitationErrorCategory.NETWORK_ERROR
+
+    # 422 from Unipile without specific message - likely a resend/rate limit
+    if status_code == 422:
+        return InvitationErrorCategory.RATE_LIMIT_RESEND
+
+    return InvitationErrorCategory.UNKNOWN
 
 
 class UnipileService:
@@ -189,18 +277,25 @@ class UnipileService:
                         "status_code": response.status_code
                     }
                 else:
-                    logger.error(f"Failed to send invitation: {response.status_code} - {response.text}")
+                    error_text = response.text or ""
+                    error_category = classify_invitation_error(error_text, response.status_code)
+                    logger.error(
+                        f"Failed to send invitation: {response.status_code} - {error_text} "
+                        f"(category: {error_category.value})"
+                    )
                     return {
                         "success": False,
-                        "error": response.text,
-                        "status_code": response.status_code
+                        "error": error_text,
+                        "status_code": response.status_code,
+                        "error_category": error_category.value,
                     }
 
         except Exception as e:
             logger.error(f"Error sending invitation: {e}")
             return {
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "error_category": InvitationErrorCategory.NETWORK_ERROR.value,
             }
 
     async def send_invitation_by_url(
@@ -227,7 +322,8 @@ class UnipileService:
             logger.error(f"Failed to extract provider_id from URL: {linkedin_url}")
             return {
                 "success": False,
-                "error": f"Could not extract provider ID from URL: {linkedin_url}"
+                "error": f"Could not extract provider ID from URL: {linkedin_url}",
+                "error_category": InvitationErrorCategory.INVALID_PROFILE.value,
             }
 
         logger.info(f"Looking up user info for provider_id: {provider_id}")
@@ -236,10 +332,14 @@ class UnipileService:
         user_info = await self.get_user_info(provider_id)
 
         if not user_info.get("success"):
-            logger.error(f"Failed to get user info for {provider_id}: {user_info.get('error')}")
+            error_text = user_info.get("error", "Unknown error")
+            status_code = user_info.get("status_code", 0)
+            error_category = classify_invitation_error(error_text, status_code)
+            logger.error(f"Failed to get user info for {provider_id}: {error_text}")
             return {
                 "success": False,
-                "error": f"Could not get user info: {user_info.get('error')}"
+                "error": f"Could not get user info: {error_text}",
+                "error_category": error_category.value,
             }
 
         # Extract the correct ID from user info
@@ -436,18 +536,22 @@ class UnipileService:
                         "status_code": response.status_code
                     }
                 else:
-                    logger.error(f"Failed to send message: {response.status_code} - {response.text}")
+                    error_text = response.text or ""
+                    error_category = classify_invitation_error(error_text, response.status_code)
+                    logger.error(f"Failed to send message: {response.status_code} - {error_text}")
                     return {
                         "success": False,
-                        "error": response.text,
-                        "status_code": response.status_code
+                        "error": error_text,
+                        "status_code": response.status_code,
+                        "error_category": error_category.value,
                     }
 
         except Exception as e:
             logger.error(f"Error sending message: {e}")
             return {
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "error_category": InvitationErrorCategory.NETWORK_ERROR.value,
             }
 
     async def check_connection_status(self) -> Dict[str, Any]:

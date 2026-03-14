@@ -76,7 +76,7 @@ export default function EnrollmentDetailModal({
 }: EnrollmentDetailModalProps) {
   const { data: detail, isLoading } = useQuery({
     queryKey: ['enrollment-detail', sequenceId, enrollmentId],
-    queryFn: () => getEnrollmentDetail(sequenceId, enrollmentId),
+    queryFn: () => getEnrollmentDetail(enrollmentId),
   })
 
   return (
@@ -171,7 +171,7 @@ export default function EnrollmentDetailModal({
                   <div className="mt-3 pt-3 border-t">
                     <p className="text-xs font-medium text-gray-500 mb-1">Buying Signals</p>
                     <div className="flex flex-wrap gap-1">
-                      {detail.lead_buying_signals.map((signal, i) => (
+                      {detail.lead_buying_signals.map((signal: string, i: number) => (
                         <span key={i} className="px-2 py-0.5 bg-green-50 text-green-700 text-xs rounded-full">
                           {signal}
                         </span>
@@ -192,7 +192,7 @@ export default function EnrollmentDetailModal({
                   <p className="text-sm text-gray-400 italic">No messages sent yet</p>
                 ) : (
                   <div className="space-y-3">
-                    {detail.messages.map((msg, i) => {
+                    {detail.messages.map((msg: any, i: number) => {
                       const isPipelineMsg = msg.key.startsWith('pipeline_')
                       const phaseMatch = msg.key.match(/pipeline_(\w+)_(\d+)/)
                       const phaseLabel = phaseMatch ? (phaseLabels[phaseMatch[1]] || phaseMatch[1]) : `Step ${msg.key}`

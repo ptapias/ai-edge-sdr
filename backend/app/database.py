@@ -55,6 +55,10 @@ def run_migrations():
         "ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS nurture_count INTEGER DEFAULT 0",
         "ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS reactivation_count INTEGER DEFAULT 0",
         "ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS total_messages_sent INTEGER DEFAULT 0",
+        "ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS step_attempts INTEGER DEFAULT 0",
+        "ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS step_last_error TEXT",
+        "ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS step_error_category VARCHAR(50)",
+        "ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS step_next_retry_at TIMESTAMP",
     ]
     with engine.connect() as conn:
         for sql in migrations:

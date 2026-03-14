@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, or_
 
 from ..database import get_db
 from ..dependencies import get_current_user
@@ -23,9 +23,9 @@ from ..schemas.automation import (
     InvitationLogResponse,
     InvitationStatsResponse
 )
-from ..services.unipile_service import UnipileService
+from ..services.unipile_service import UnipileService, InvitationErrorCategory
 from ..services.claude_service import ClaudeService
-from ..services.scheduler_service import is_scheduler_running
+from ..services.scheduler_service import is_scheduler_running, _handle_invitation_failure, MAX_INVITATION_ATTEMPTS
 from ..services.encryption_service import get_encryption_service
 
 logger = logging.getLogger(__name__)
@@ -152,7 +152,9 @@ def get_automation_status(
         next_invitation_in_seconds=next_in_seconds,
         current_time=current_time,
         timezone=settings.timezone,
-        scheduler_running=is_scheduler_running()
+        scheduler_running=is_scheduler_running(),
+        scheduler_paused_until=settings.scheduler_paused_until,
+        scheduler_pause_reason=settings.scheduler_pause_reason,
     )
 
 
@@ -200,11 +202,16 @@ async def send_next_invitation(
 
     # Find next lead to contact (owned by current user)
     target_statuses = settings.target_statuses.split(",")
+    now = datetime.utcnow()
     query = db.query(Lead).filter(
         Lead.user_id == current_user.id,
         Lead.status.in_(target_statuses),
         Lead.linkedin_url.isnot(None),
-        Lead.linkedin_message.isnot(None)
+        Lead.linkedin_message.isnot(None),
+        # Exclude leads in backoff cooldown
+        or_(Lead.invitation_next_retry_at.is_(None), Lead.invitation_next_retry_at <= now),
+        # Exclude leads that have exhausted max retries
+        or_(Lead.invitation_attempts.is_(None), Lead.invitation_attempts < MAX_INVITATION_ATTEMPTS),
     )
 
     # Apply campaign filter if set (must belong to current user)
@@ -246,6 +253,15 @@ async def send_next_invitation(
         campaign = db.query(Campaign).filter(Campaign.id == lead.campaign_id).first()
         campaign_name = campaign.name if campaign else None
 
+    # Get error category if failed (result returns string .value, convert to enum)
+    error_category_str = result.get("error_category")  # string or None
+    error_category_enum = None
+    if error_category_str:
+        try:
+            error_category_enum = InvitationErrorCategory(error_category_str)
+        except ValueError:
+            error_category_enum = InvitationErrorCategory.UNKNOWN
+
     # Log the attempt with full details
     log = InvitationLog(
         user_id=current_user.id,
@@ -259,6 +275,7 @@ async def send_next_invitation(
         campaign_name=campaign_name,
         success=result.get("success", False),
         error_message=result.get("error") if not result.get("success") else None,
+        error_category=error_category_str,
         mode="automatic"
     )
     db.add(log)
@@ -268,11 +285,40 @@ async def send_next_invitation(
         lead.status = LeadStatus.INVITATION_SENT.value
         lead.connection_sent_at = datetime.utcnow()
 
+        # Reset retry tracking on success
+        lead.invitation_attempts = 0
+        lead.invitation_last_error = None
+        lead.invitation_error_category = None
+        lead.invitation_next_retry_at = None
+
         # Update automation stats
         settings.invitations_sent_today += 1
         settings.last_invitation_at = datetime.utcnow()
 
         logger.info(f"Auto-sent invitation to {lead.first_name} {lead.last_name} for user {current_user.email}")
+    else:
+        # Handle failure with proper backoff and error classification
+        if error_category_enum:
+            _handle_invitation_failure(
+                lead=lead,
+                settings=settings,
+                error_msg=result.get("error", "Unknown error"),
+                error_category=error_category_enum,
+                db=db,
+                source="SendNext"
+            )
+        else:
+            # Unknown error without category - classify from error text
+            from ..services.unipile_service import classify_invitation_error
+            classified = classify_invitation_error(result.get("error", ""), None)
+            _handle_invitation_failure(
+                lead=lead,
+                settings=settings,
+                error_msg=result.get("error", "Unknown error"),
+                error_category=classified,
+                db=db,
+                source="SendNext"
+            )
 
     db.commit()
 
@@ -285,6 +331,7 @@ async def send_next_invitation(
         "lead_name": f"{lead.first_name} {lead.last_name}",
         "company": lead.company_name,
         "error": result.get("error") if not result.get("success") else None,
+        "error_category": error_category_str,
         "invitations_today": settings.invitations_sent_today,
         "daily_limit": settings.daily_limit,
         "next_delay_seconds": next_delay if result.get("success") else 60
@@ -404,11 +451,16 @@ def get_invitation_queue(
     settings = get_or_create_settings(db, current_user.id)
     target_statuses = settings.target_statuses.split(",")
 
+    now = datetime.utcnow()
     query = db.query(Lead).filter(
         Lead.user_id == current_user.id,
         Lead.status.in_(target_statuses),
         Lead.linkedin_url.isnot(None),
-        Lead.linkedin_message.isnot(None)
+        Lead.linkedin_message.isnot(None),
+        # Exclude leads in backoff cooldown
+        or_(Lead.invitation_next_retry_at.is_(None), Lead.invitation_next_retry_at <= now),
+        # Exclude leads that have exhausted max retries
+        or_(Lead.invitation_attempts.is_(None), Lead.invitation_attempts < MAX_INVITATION_ATTEMPTS),
     )
 
     # Apply campaign filter if set
@@ -444,6 +496,8 @@ def get_invitation_queue(
             "score_label": lead.score_label,
             "campaign_id": lead.campaign_id,
             "campaign_name": campaign_name,
+            "invitation_attempts": lead.invitation_attempts,
+            "invitation_next_retry_at": lead.invitation_next_retry_at.isoformat() if lead.invitation_next_retry_at else None,
         })
 
     return {
@@ -524,4 +578,71 @@ def generate_messages_for_pending(
     return {
         "generated": sum(1 for r in results if r.get("success")),
         "results": results
+    }
+
+
+@router.post("/clear-pause")
+def clear_scheduler_pause(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Manually clear the global scheduler pause.
+    Use when the scheduler was paused due to rate limiting and you want to resume.
+    """
+    settings = get_or_create_settings(db, current_user.id)
+
+    if not settings.scheduler_paused_until:
+        return {"cleared": False, "message": "Scheduler is not paused"}
+
+    old_reason = settings.scheduler_pause_reason
+    old_until = settings.scheduler_paused_until
+    settings.clear_pause()
+    db.commit()
+
+    logger.info(
+        f"Scheduler pause cleared manually by {current_user.email}. "
+        f"Was paused until {old_until} for: {old_reason}"
+    )
+
+    return {
+        "cleared": True,
+        "message": f"Scheduler pause cleared. Was paused until {old_until} for: {old_reason}"
+    }
+
+
+@router.post("/retry-failed")
+def retry_failed_leads(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Reset all leads with 'invitation_failed' status back to 'pending',
+    clearing their retry counters so they can be retried.
+    """
+    failed_leads = db.query(Lead).filter(
+        Lead.user_id == current_user.id,
+        Lead.status == LeadStatus.INVITATION_FAILED.value
+    ).all()
+
+    if not failed_leads:
+        return {"reset": 0, "message": "No failed leads to retry"}
+
+    count = 0
+    for lead in failed_leads:
+        lead.status = LeadStatus.PENDING.value
+        lead.invitation_attempts = 0
+        lead.invitation_last_error = None
+        lead.invitation_error_category = None
+        lead.invitation_next_retry_at = None
+        lead.invitation_first_failed_at = None
+        count += 1
+
+    db.commit()
+
+    logger.info(f"Reset {count} failed leads to pending for user {current_user.email}")
+
+    return {
+        "reset": count,
+        "message": f"Reset {count} failed leads to pending. They will be retried by the scheduler."
     }

@@ -108,6 +108,7 @@ export type LeadStatusValue =
   | 'new'
   | 'pending'
   | 'invitation_sent'
+  | 'invitation_failed'
   | 'connected'
   | 'in_conversation'
   | 'meeting_scheduled'
@@ -395,6 +396,8 @@ export interface AutomationStatus {
   current_time: string | null
   timezone: string | null
   scheduler_running: boolean
+  scheduler_paused_until: string | null
+  scheduler_pause_reason: string | null
 }
 
 export interface InvitationStats {
@@ -421,6 +424,7 @@ export interface InvitationLog {
   campaign_name: string | null
   success: boolean
   error_message: string | null
+  error_category: string | null
   sent_at: string
   mode: string
 }
@@ -493,6 +497,16 @@ export const generatePendingMessages = async (limit = 10) => {
 
 export const getInvitationQueue = async (limit = 10): Promise<InvitationQueue> => {
   const response = await api.get('/automation/queue', { params: { limit } })
+  return response.data
+}
+
+export const clearSchedulerPause = async () => {
+  const response = await api.post('/automation/clear-pause')
+  return response.data
+}
+
+export const retryFailedLeads = async () => {
+  const response = await api.post('/automation/retry-failed')
   return response.data
 }
 
@@ -757,8 +771,7 @@ export interface SequenceStep {
   updated_at: string
 }
 
-export type SequenceMode = 'classic' | 'smart_pipeline'
-export type PipelinePhase = 'apertura' | 'calificacion' | 'valor' | 'nurture' | 'reactivacion'
+export type SequenceMode = "classic" | "smart_pipeline"
 
 export interface Sequence {
   id: string
@@ -767,7 +780,7 @@ export interface Sequence {
   status: 'draft' | 'active' | 'paused' | 'archived'
   business_id: string | null
   message_strategy: 'hybrid' | 'direct' | 'gradual'
-  sequence_mode: SequenceMode
+  sequence_mode?: SequenceMode
   total_enrolled: number
   active_enrolled: number
   completed_count: number
@@ -784,7 +797,7 @@ export interface SequenceListItem {
   description: string | null
   status: string
   message_strategy: string
-  sequence_mode: SequenceMode
+  sequence_mode?: string
   total_enrolled: number
   active_enrolled: number
   completed_count: number
@@ -812,58 +825,35 @@ export interface SequenceEnrollment {
   lead_job_title: string | null
   lead_status: string | null
   lead_score_label: string | null
-  // Smart Pipeline fields
-  current_phase: PipelinePhase | null
-  phase_entered_at: string | null
+  current_phase: string | null
+  messages_in_phase: number | null
   last_response_at: string | null
-  messages_in_phase: number
-  nurture_count: number
-  reactivation_count: number
-  total_messages_sent: number
-  // Lead intelligence
+  total_messages_sent: number | null
+  nurture_count: number | null
   lead_sentiment_level: string | null
-  lead_signal_strength: string | null
-}
-
-export interface EnrollmentDetail extends SequenceEnrollment {
-  messages: Array<{ key: string; message_text: string }>
-  phase_analysis: Record<string, unknown> | null
-  last_response_text: string | null
-  lead_buying_signals: string[]
-  lead_priority_score: number | null
 }
 
 export interface SequenceStats {
   sequence_id: string
   sequence_name: string
-  sequence_mode: SequenceMode
   total_enrolled: number
   active: number
   completed: number
   replied: number
   failed: number
   paused: number
-  withdrawn: number
   parked: number
+  withdrawn: number
   reply_rate: number
   completion_rate: number
+  sequence_mode?: string
   steps_breakdown: Array<{
     step_order: number
     step_type: string
     reached: number
     completed: number
   }>
-  phase_breakdown: {
-    awaiting_connection: number
-    apertura: number
-    calificacion: number
-    valor: number
-    nurture: number
-    reactivacion: number
-    meeting: number
-    parked: number
-    exited: number
-  } | null
+  phase_breakdown?: Record<string, number>
 }
 
 export interface SequenceDashboard {
@@ -882,7 +872,7 @@ export interface SequenceCreateData {
   description?: string
   business_id?: string
   message_strategy?: string
-  sequence_mode?: SequenceMode
+  sequence_mode?: string
   steps?: Array<{
     step_type: string
     delay_days: number
@@ -969,12 +959,12 @@ export const getEnrollments = async (sequenceId: string, status?: string): Promi
   return response.data
 }
 
-export const getEnrollmentDetail = async (sequenceId: string, enrollmentId: string): Promise<EnrollmentDetail> => {
-  const response = await api.get(`/sequences/${sequenceId}/enrollments/${enrollmentId}`)
+// Stats
+export const getEnrollmentDetail = async (enrollmentId: string): Promise<any> => {
+  const response = await api.get(`/sequences/enrollments/${enrollmentId}/detail`)
   return response.data
 }
 
-// Stats
 export const getSequenceStats = async (sequenceId: string): Promise<SequenceStats> => {
   const response = await api.get(`/sequences/${sequenceId}/stats`)
   return response.data

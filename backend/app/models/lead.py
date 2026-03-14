@@ -15,6 +15,7 @@ class LeadStatus(str, Enum):
     NEW = "new"                          # Nuevo, sin contactar
     PENDING = "pending"                  # Pendiente de invitación
     INVITATION_SENT = "invitation_sent"  # Invitación enviada
+    INVITATION_FAILED = "invitation_failed"  # Invitación fallida permanentemente (max retries o error permanente)
     CONNECTED = "connected"              # Conectado en LinkedIn
     IN_CONVERSATION = "in_conversation"  # En conversación
     MEETING_SCHEDULED = "meeting_scheduled"  # Reunión agendada
@@ -29,6 +30,7 @@ LEAD_STATUS_CONFIG = {
     LeadStatus.NEW: {"label": "New", "color": "gray", "order": 1},
     LeadStatus.PENDING: {"label": "Pending", "color": "yellow", "order": 2},
     LeadStatus.INVITATION_SENT: {"label": "Invitation Sent", "color": "blue", "order": 3},
+    LeadStatus.INVITATION_FAILED: {"label": "Invitation Failed", "color": "red", "order": 3.5},
     LeadStatus.CONNECTED: {"label": "Connected", "color": "green", "order": 4},
     LeadStatus.IN_CONVERSATION: {"label": "In Conversation", "color": "purple", "order": 5},
     LeadStatus.MEETING_SCHEDULED: {"label": "Meeting Scheduled", "color": "orange", "order": 6},
@@ -103,6 +105,13 @@ class Lead(Base):
     connected_at = Column(DateTime, nullable=True)
     last_message_at = Column(DateTime, nullable=True)
     linkedin_chat_id = Column(String(100), nullable=True)  # Unipile chat ID
+
+    # Invitation retry tracking (prevents infinite retry loops)
+    invitation_attempts = Column(Integer, default=0, nullable=True)         # Total attempt count
+    invitation_last_error = Column(String(500), nullable=True)              # Last error message
+    invitation_error_category = Column(String(50), nullable=True)           # Classified error type
+    invitation_next_retry_at = Column(DateTime, nullable=True)              # When to retry (backoff)
+    invitation_first_failed_at = Column(DateTime, nullable=True)            # When first failure occurred
 
     # AI Intelligence
     sentiment_level = Column(String(10), nullable=True)  # hot/warm/cold

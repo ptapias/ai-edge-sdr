@@ -59,6 +59,10 @@ class AutomationSettings(Base):
     last_invitation_at = Column(DateTime, nullable=True)
     last_reset_date = Column(DateTime, nullable=True)
 
+    # Global rate limit / pause state
+    scheduler_paused_until = Column(DateTime, nullable=True)    # If set, pause all sending until this time
+    scheduler_pause_reason = Column(String(200), nullable=True) # Why it was paused
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -93,8 +97,28 @@ class AutomationSettings(Base):
 
         return start_minutes <= current_minutes <= end_minutes
 
+    def is_globally_paused(self) -> bool:
+        """Check if the scheduler is paused due to rate limiting."""
+        if self.scheduler_paused_until is None:
+            return False
+        return datetime.utcnow() < self.scheduler_paused_until
+
+    def pause_until(self, until: datetime, reason: str):
+        """Pause all invitation sending until a specific time."""
+        self.scheduler_paused_until = until
+        self.scheduler_pause_reason = reason
+
+    def clear_pause(self):
+        """Clear the global pause."""
+        self.scheduler_paused_until = None
+        self.scheduler_pause_reason = None
+
     def can_send_invitation(self) -> bool:
         """Check if we can send another invitation today."""
+        # Check global pause (rate limit protection)
+        if self.is_globally_paused():
+            return False
+
         # Check daily limit
         if self.invitations_sent_today >= self.daily_limit:
             return False
@@ -138,6 +162,7 @@ class InvitationLog(Base):
     # Result
     success = Column(Boolean, default=False)
     error_message = Column(String(500), nullable=True)
+    error_category = Column(String(50), nullable=True)  # Classified error type for analytics
 
     # Metadata
     sent_at = Column(DateTime, default=datetime.utcnow)

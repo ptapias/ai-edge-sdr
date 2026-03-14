@@ -20,7 +20,10 @@ import {
   MessageSquare,
   Target,
   Filter,
-  Globe
+  Globe,
+  AlertTriangle,
+  RotateCcw,
+  ShieldAlert,
 } from 'lucide-react'
 import {
   getAutomationSettings,
@@ -33,6 +36,8 @@ import {
   sendNextInvitation,
   generatePendingMessages,
   getCampaigns,
+  clearSchedulerPause,
+  retryFailedLeads,
   type AutomationSettings,
   type InvitationLog,
   type QueueLead,
@@ -179,8 +184,23 @@ function QueueLeadCard({ lead }: { lead: QueueLead }) {
   )
 }
 
+// Error category badge colors and labels
+const ERROR_CATEGORY_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+  rate_limit_weekly: { bg: 'bg-orange-100', text: 'text-orange-700', label: 'Weekly Limit' },
+  rate_limit_daily: { bg: 'bg-orange-100', text: 'text-orange-700', label: 'Daily Limit' },
+  rate_limit_resend: { bg: 'bg-yellow-100', text: 'text-yellow-700', label: 'Resend Limit' },
+  already_connected: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Already Connected' },
+  already_invited: { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Already Invited' },
+  invalid_profile: { bg: 'bg-red-100', text: 'text-red-700', label: 'Invalid Profile' },
+  account_restricted: { bg: 'bg-red-100', text: 'text-red-700', label: 'Account Restricted' },
+  network_error: { bg: 'bg-gray-100', text: 'text-gray-700', label: 'Network Error' },
+  unknown: { bg: 'bg-gray-100', text: 'text-gray-600', label: 'Unknown' },
+}
+
 function InvitationLogCard({ log }: { log: InvitationLog }) {
   const [expanded, setExpanded] = useState(false)
+
+  const errorStyle = log.error_category ? ERROR_CATEGORY_STYLES[log.error_category] : null
 
   return (
     <div
@@ -209,13 +229,20 @@ function InvitationLogCard({ log }: { log: InvitationLog }) {
           </div>
         </div>
         <div className="text-right flex-shrink-0 ml-2">
-          <p className={`text-xs px-2 py-0.5 rounded ${
-            log.mode === 'automatic'
-              ? 'bg-purple-100 text-purple-700'
-              : 'bg-gray-100 text-gray-700'
-          }`}>
-            {log.mode}
-          </p>
+          <div className="flex items-center gap-1.5 justify-end">
+            {errorStyle && (
+              <span className={`text-xs px-2 py-0.5 rounded ${errorStyle.bg} ${errorStyle.text}`}>
+                {errorStyle.label}
+              </span>
+            )}
+            <span className={`text-xs px-2 py-0.5 rounded ${
+              log.mode === 'automatic'
+                ? 'bg-purple-100 text-purple-700'
+                : 'bg-gray-100 text-gray-700'
+            }`}>
+              {log.mode}
+            </span>
+          </div>
           <p className="text-xs text-gray-400 mt-1">
             {new Date(log.sent_at).toLocaleTimeString()}
           </p>
@@ -320,6 +347,23 @@ export default function AutomationPage() {
     },
   })
 
+  const clearPauseMutation = useMutation({
+    mutationFn: clearSchedulerPause,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['automation-status'] })
+      queryClient.invalidateQueries({ queryKey: ['automation-settings'] })
+    },
+  })
+
+  const retryFailedMutation = useMutation({
+    mutationFn: retryFailedLeads,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] })
+      queryClient.invalidateQueries({ queryKey: ['invitation-queue'] })
+      queryClient.invalidateQueries({ queryKey: ['automation-status'] })
+    },
+  })
+
   const handleSaveSettings = () => {
     updateMutation.mutate(localSettings)
   }
@@ -376,6 +420,38 @@ export default function AutomationPage() {
           {settings?.enabled ? 'Stop' : 'Start'}
         </button>
       </div>
+
+      {/* Global Pause Banner */}
+      {status?.scheduler_paused_until && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <ShieldAlert className="w-6 h-6 text-red-600 flex-shrink-0" />
+              <div>
+                <p className="font-semibold text-red-800">Scheduler Paused</p>
+                <p className="text-sm text-red-700">
+                  {status.scheduler_pause_reason || 'Rate limit protection activated'}
+                </p>
+                <p className="text-xs text-red-600 mt-1">
+                  Paused until: {new Date(status.scheduler_paused_until).toLocaleString()}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => clearPauseMutation.mutate()}
+              disabled={clearPauseMutation.isPending}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              {clearPauseMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RotateCcw className="w-4 h-4" />
+              )}
+              Clear Pause
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Campaign Selector */}
       <div className="bg-white rounded-lg border p-4">
@@ -440,11 +516,13 @@ export default function AutomationPage() {
               <p className="text-sm text-gray-600">
                 {!status?.enabled
                   ? 'Click "Start" to begin sending connections'
-                  : !status?.is_working_hour
-                    ? 'Outside working hours'
-                    : status?.remaining_today === 0
-                      ? 'Daily limit reached'
-                      : `${status?.remaining_today} connections remaining today`}
+                  : status?.scheduler_paused_until
+                    ? `Rate limit protection active — paused until ${new Date(status.scheduler_paused_until).toLocaleString()}`
+                    : !status?.is_working_hour
+                      ? 'Outside working hours'
+                      : status?.remaining_today === 0
+                        ? 'Daily limit reached'
+                        : `${status?.remaining_today} connections remaining today`}
               </p>
             </div>
             {status?.current_time && (
@@ -466,6 +544,19 @@ export default function AutomationPage() {
             )}
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => retryFailedMutation.mutate()}
+              disabled={retryFailedMutation.isPending}
+              className="btn btn-secondary flex items-center text-sm"
+              title="Reset failed leads so they can be retried"
+            >
+              {retryFailedMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 mr-2" />
+              )}
+              Retry Failed
+            </button>
             <button
               onClick={() => generateMutation.mutate()}
               disabled={generateMutation.isPending}

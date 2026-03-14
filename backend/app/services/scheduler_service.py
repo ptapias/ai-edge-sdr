@@ -3,27 +3,143 @@ Background scheduler for automatic LinkedIn invitation sending.
 
 This service runs in the background and automatically sends invitations
 based on the automation settings (working hours, delays, limits, etc.)
+
+CRITICAL: Includes error classification, exponential backoff, and global
+pause logic to prevent infinite retry loops that could ban the LinkedIn account.
 """
 import asyncio
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from ..models import Lead, AutomationSettings, InvitationLog, Campaign
 from ..models.lead import LeadStatus
-from ..models.user import LinkedInAccount
-from .unipile_service import UnipileService
-from .encryption_service import get_encryption_service
+from .unipile_service import (
+    UnipileService,
+    InvitationErrorCategory,
+    classify_invitation_error,
+    PERMANENT_ERRORS,
+    GLOBAL_PAUSE_ERRORS,
+)
 
 logger = logging.getLogger(__name__)
 
 # Global flag to control the scheduler
 _scheduler_running = False
 _scheduler_task: Optional[asyncio.Task] = None
+
+# Maximum invitation attempts before marking lead as permanently failed
+MAX_INVITATION_ATTEMPTS = 5
+
+
+def _calculate_backoff_minutes(attempts: int) -> int:
+    """
+    Calculate exponential backoff duration in minutes.
+
+    Attempt 1: 5 min
+    Attempt 2: 15 min
+    Attempt 3: 45 min
+    Attempt 4: 135 min (~2h 15min)
+    Attempt 5: 360 min (6h, capped)
+    """
+    return min(5 * (3 ** (attempts - 1)), 360)
+
+
+def _handle_invitation_failure(
+    lead: Lead,
+    settings: AutomationSettings,
+    error_msg: str,
+    error_category: InvitationErrorCategory,
+    db: Session,
+    source: str = "Scheduler",
+):
+    """
+    Handle a failed invitation attempt with proper error classification,
+    backoff, and global pause logic.
+
+    This is the core fix that prevents infinite retry loops.
+    """
+    # Update lead retry tracking
+    lead.invitation_attempts = (lead.invitation_attempts or 0) + 1
+    lead.invitation_last_error = (error_msg or "Unknown error")[:500]
+    lead.invitation_error_category = error_category.value
+    if not lead.invitation_first_failed_at:
+        lead.invitation_first_failed_at = datetime.utcnow()
+
+    # --- PERMANENT ERROR: Mark lead as failed, never retry ---
+    if error_category in PERMANENT_ERRORS:
+        lead.status = LeadStatus.INVITATION_FAILED.value
+        lead.invitation_next_retry_at = None
+        logger.warning(
+            f"[{source}] PERMANENT failure for {lead.display_name}: "
+            f"{error_category.value} - {error_msg[:100]}"
+        )
+
+    # --- GLOBAL RATE LIMIT: Pause the entire scheduler ---
+    elif error_category in GLOBAL_PAUSE_ERRORS:
+        now = datetime.utcnow()
+
+        if error_category == InvitationErrorCategory.RATE_LIMIT_WEEKLY:
+            # Pause until next Monday 9 AM (user's timezone not available here, use UTC)
+            days_until_monday = (7 - now.weekday()) % 7
+            if days_until_monday == 0:
+                days_until_monday = 7
+            pause_until = (now + timedelta(days=days_until_monday)).replace(
+                hour=9, minute=0, second=0, microsecond=0
+            )
+            settings.pause_until(pause_until, f"Weekly limit reached")
+
+        elif error_category == InvitationErrorCategory.RATE_LIMIT_DAILY:
+            # Pause until tomorrow 9 AM
+            pause_until = (now + timedelta(days=1)).replace(
+                hour=9, minute=0, second=0, microsecond=0
+            )
+            settings.pause_until(pause_until, f"Daily limit reached")
+
+        elif error_category == InvitationErrorCategory.RATE_LIMIT_RESEND:
+            # "Cannot resend yet / provider limit" - pause for 2 hours
+            pause_until = now + timedelta(hours=2)
+            settings.pause_until(pause_until, f"Provider limit reached - temporary cooldown")
+
+        elif error_category == InvitationErrorCategory.ACCOUNT_RESTRICTED:
+            # Pause for 24 hours - requires manual review
+            pause_until = now + timedelta(hours=24)
+            settings.pause_until(pause_until, f"Account restricted - manual review needed")
+
+        else:
+            pause_until = now + timedelta(hours=6)
+            settings.pause_until(pause_until, f"Rate limit: {error_category.value}")
+
+        # Also set backoff on this specific lead
+        lead.invitation_next_retry_at = settings.scheduler_paused_until
+        logger.error(
+            f"[{source}] GLOBAL PAUSE triggered by {lead.display_name}: "
+            f"{error_category.value} - paused until {settings.scheduler_paused_until}"
+        )
+
+    # --- TEMPORARY ERROR: Exponential backoff on this lead only ---
+    else:
+        attempts = lead.invitation_attempts or 1
+        backoff_minutes = _calculate_backoff_minutes(attempts)
+        lead.invitation_next_retry_at = datetime.utcnow() + timedelta(minutes=backoff_minutes)
+        logger.warning(
+            f"[{source}] Temporary failure for {lead.display_name}: "
+            f"{error_category.value} - retry in {backoff_minutes}min (attempt {attempts}/{MAX_INVITATION_ATTEMPTS})"
+        )
+
+    # --- MAX RETRIES: Mark as permanently failed ---
+    if (lead.invitation_attempts or 0) >= MAX_INVITATION_ATTEMPTS and lead.status != LeadStatus.INVITATION_FAILED.value:
+        lead.status = LeadStatus.INVITATION_FAILED.value
+        lead.invitation_next_retry_at = None
+        logger.error(
+            f"[{source}] MAX RETRIES ({MAX_INVITATION_ATTEMPTS}) reached for {lead.display_name} - "
+            f"marking as invitation_failed"
+        )
 
 
 async def send_automatic_invitation(db: Session) -> dict:
@@ -42,7 +158,15 @@ async def send_automatic_invitation(db: Session) -> dict:
     if settings.last_reset_date is None or settings.last_reset_date.date() < today:
         settings.invitations_sent_today = 0
         settings.last_reset_date = datetime.utcnow()
+        # Also auto-clear daily pause if it expired
+        if settings.scheduler_paused_until and datetime.utcnow() >= settings.scheduler_paused_until:
+            settings.clear_pause()
+            logger.info("[Scheduler] Auto-cleared expired scheduler pause")
         db.commit()
+
+    # Check global pause (rate limit protection)
+    if settings.is_globally_paused():
+        return {"sent": False, "reason": f"Scheduler paused: {settings.scheduler_pause_reason}"}
 
     # Check if we can send
     if not settings.enabled:
@@ -62,12 +186,23 @@ async def send_automatic_invitation(db: Session) -> dict:
         if elapsed < required_delay:
             return {"sent": False, "reason": f"Waiting for delay ({int(required_delay - elapsed)}s remaining)"}
 
-    # Find next lead to contact
+    # Find next lead to contact (with backoff and retry exclusions)
+    now = datetime.utcnow()
     target_statuses = settings.target_statuses.split(",")
     query = db.query(Lead).filter(
         Lead.status.in_(target_statuses),
         Lead.linkedin_url.isnot(None),
-        Lead.linkedin_message.isnot(None)
+        Lead.linkedin_message.isnot(None),
+        # Exclude leads currently in backoff cooldown
+        or_(
+            Lead.invitation_next_retry_at.is_(None),
+            Lead.invitation_next_retry_at <= now,
+        ),
+        # Exclude leads that have exhausted retries
+        or_(
+            Lead.invitation_attempts.is_(None),
+            Lead.invitation_attempts < MAX_INVITATION_ATTEMPTS,
+        ),
     )
 
     # Apply campaign filter if set
@@ -87,24 +222,17 @@ async def send_automatic_invitation(db: Session) -> dict:
     if not lead:
         return {"sent": False, "reason": "No eligible leads"}
 
-    # Send invitation via Unipile (use per-user credentials if available)
+    # Send invitation via Unipile
     unipile = UnipileService()
-    if lead.user_id:
-        linkedin_account = db.query(LinkedInAccount).filter(
-            LinkedInAccount.user_id == lead.user_id,
-            LinkedInAccount.is_connected == True
-        ).first()
-        if linkedin_account and linkedin_account.unipile_api_key_encrypted:
-            encryption_service = get_encryption_service()
-            api_key = encryption_service.decrypt(linkedin_account.unipile_api_key_encrypted)
-            account_id = linkedin_account.unipile_account_id
-            unipile = UnipileService(api_key=api_key, account_id=account_id)
     result = await unipile.send_invitation_by_url(lead.linkedin_url, lead.linkedin_message)
 
     # Get campaign name for the log
     if not campaign_name and lead.campaign_id:
         campaign = db.query(Campaign).filter(Campaign.id == lead.campaign_id).first()
         campaign_name = campaign.name if campaign else None
+
+    # Classify the error (if any) for the log
+    error_category_str = result.get("error_category") if not result.get("success") else None
 
     # Log the attempt
     log = InvitationLog(
@@ -118,6 +246,7 @@ async def send_automatic_invitation(db: Session) -> dict:
         campaign_name=campaign_name,
         success=result.get("success", False),
         error_message=result.get("error") if not result.get("success") else None,
+        error_category=error_category_str,
         mode="automatic"
     )
     db.add(log)
@@ -126,6 +255,11 @@ async def send_automatic_invitation(db: Session) -> dict:
         # Update lead status
         lead.status = LeadStatus.INVITATION_SENT.value
         lead.connection_sent_at = datetime.utcnow()
+        # Reset retry tracking on success
+        lead.invitation_attempts = 0
+        lead.invitation_last_error = None
+        lead.invitation_error_category = None
+        lead.invitation_next_retry_at = None
 
         # Update automation stats
         settings.invitations_sent_today += 1
@@ -133,7 +267,12 @@ async def send_automatic_invitation(db: Session) -> dict:
 
         logger.info(f"[Scheduler] Sent invitation to {lead.first_name} {lead.last_name}")
     else:
-        logger.warning(f"[Scheduler] Failed to send to {lead.first_name} {lead.last_name}: {result.get('error')}")
+        # CRITICAL: Handle failure with proper classification, backoff, and pause
+        error_msg = result.get("error", "Unknown error")
+        error_category = InvitationErrorCategory(
+            result.get("error_category", InvitationErrorCategory.UNKNOWN.value)
+        )
+        _handle_invitation_failure(lead, settings, error_msg, error_category, db, "Scheduler")
 
     db.commit()
 
@@ -149,30 +288,17 @@ async def scheduler_loop():
     Main scheduler loop that runs in the background.
     Multi-phase loop processing invitations and sequence steps.
 
-    Phase 1 (every tick / 30s): Send automatic invitations + process due sequence actions
-    Phase 2 (~30 min + jitter): Detect connection acceptances via Unipile
-    Phase 3 (~30 min + jitter, offset ~15 min from Phase 2): Detect replies (classic)
-    Phase 4 (~30 min + jitter, offset ~20 min from Phase 2): Smart pipeline reply detection + time-based phases
-
-    IMPORTANT: Phases 2-4 use randomized intervals (27-32 min) to simulate human behavior
-    and avoid LinkedIn detection patterns. Each phase fires independently with its own jitter.
+    Phase 1 (every tick / 30s): Send automatic invitations
+    Phase 2 (every tick / 30s): Process due sequence actions
+    Phase 3 (every 10 ticks / ~5min): Detect connection acceptances
+    Phase 4 (every 10 ticks / ~5min, offset): Detect replies
     """
     global _scheduler_running
     from .sequence_scheduler import process_sequence_actions, detect_connection_changes, detect_replies
-    from .pipeline_scheduler import detect_pipeline_replies, process_time_based_phases
 
-    logger.info("[Scheduler] Starting combined scheduler (invitations + sequences + pipeline)")
-    logger.info("[Scheduler] LinkedIn safety: polling every ~30 min with random jitter")
+    logger.info("[Scheduler] Starting combined scheduler (invitations + sequences)")
 
     tick_count = 0
-
-    # Dynamic tick targets with jitter for human-like behavior
-    # Each phase fires independently at ~30 min intervals with ±2.5 min variation
-    # Initial offsets stagger the phases to avoid burst API calls
-    next_connection_tick = random.randint(55, 65)     # First check at ~27-32 min
-    next_reply_tick = random.randint(25, 35)           # Offset ~15 min from connections
-    next_pipeline_tick = random.randint(40, 50)        # Offset ~20 min from connections
-
     while _scheduler_running:
         try:
             # Create a new database session for each iteration
@@ -182,45 +308,38 @@ async def scheduler_loop():
                 result = await send_automatic_invitation(db)
                 if result.get("sent"):
                     logger.info(f"[Scheduler] Successfully sent invitation: {result}")
-                elif result.get("reason") not in ["Automation disabled", "Outside working hours", "No eligible leads"]:
-                    logger.debug(f"[Scheduler] Not sending: {result.get('reason')}")
+                elif result.get("reason") not in [
+                    "Automation disabled", "Outside working hours",
+                    "No eligible leads", "No settings found"
+                ]:
+                    # Only log non-routine reasons (skip noise)
+                    reason = result.get("reason", "")
+                    if "Scheduler paused" in reason:
+                        # Log pause message less frequently (every 10 ticks)
+                        if tick_count % 10 == 0:
+                            logger.info(f"[Scheduler] {reason}")
+                    else:
+                        logger.debug(f"[Scheduler] Not sending: {reason}")
 
-                # Phase 1b: Process sequence actions (connection requests + follow-ups)
+                # Phase 2: Process sequence actions (connection requests + follow-ups)
                 try:
                     await process_sequence_actions(db)
                 except Exception as e:
                     logger.error(f"[Scheduler] Error in sequence actions: {e}")
 
-                # Phase 2: Detect connection acceptances (~30 min + jitter)
-                if tick_count >= next_connection_tick:
+                # Phase 3: Detect connection acceptances (every ~5 min)
+                if tick_count % 10 == 0:
                     try:
-                        logger.info(f"[Scheduler] Running connection detection (tick {tick_count})")
                         await detect_connection_changes(db)
                     except Exception as e:
                         logger.error(f"[Scheduler] Error detecting connections: {e}")
-                    next_connection_tick = tick_count + random.randint(55, 65)
 
-                # Phase 3: Detect replies - classic sequences (~30 min + jitter)
-                if tick_count >= next_reply_tick:
+                # Phase 4: Detect replies (every ~5 min, offset from Phase 3)
+                if tick_count % 10 == 5:
                     try:
-                        logger.info(f"[Scheduler] Running reply detection (tick {tick_count})")
                         await detect_replies(db)
                     except Exception as e:
                         logger.error(f"[Scheduler] Error detecting replies: {e}")
-                    next_reply_tick = tick_count + random.randint(55, 65)
-
-                # Phase 4: Smart pipeline processing (~30 min + jitter)
-                if tick_count >= next_pipeline_tick:
-                    try:
-                        logger.info(f"[Scheduler] Running pipeline detection (tick {tick_count})")
-                        await detect_pipeline_replies(db)
-                    except Exception as e:
-                        logger.error(f"[Scheduler] Error in pipeline reply detection: {e}")
-                    try:
-                        await process_time_based_phases(db)
-                    except Exception as e:
-                        logger.error(f"[Scheduler] Error in pipeline time-based phases: {e}")
-                    next_pipeline_tick = tick_count + random.randint(55, 65)
 
                 tick_count += 1
             finally:
