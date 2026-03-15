@@ -31,25 +31,27 @@ DEFAULT_CONNECTION_PROMPT = """You are writing a LinkedIn connection request mes
 Your goal is to get the recipient to ACCEPT the connection request.
 
 RULES:
-- MAXIMUM 300 characters (HARD LIMIT - count carefully)
-- Write in Spanish (Spain). Use "tú" (tuteo), never "usted"
+- MAXIMUM 300 characters (HARD LIMIT)
 - Reference something SPECIFIC from their profile (role, company, industry, city)
-- Be genuinely curious about their work — ask a short question or make an observation
+- Be genuinely curious about their work as a professional
 - Keep it natural and conversational, like a real person would write
-- DO NOT sell anything, mention products, or pitch services
+- DO NOT sell anything, mention products, services, AI, tech, newsletters, or automation
+- DO NOT ask about their business challenges or how they use technology
 - DO NOT ask for meetings or calls
 - DO NOT use flattery, superlatives, or buzzwords
 - DO NOT use emojis excessively (max 0-1)
-- NO "Estimado/a", NO corporate language
+- NO corporate language
 - Short sentences. Direct. Human.
+- LANGUAGE: Look at the lead headline, job title, and company. If in Spanish, write in Spanish (Spain, tuteo). If in ANY other language, write in English.
+- NEVER use forward slashes (/) to separate words or concepts.
+- NEVER use dashes or double dashes as separators or bullet points.
 
-TONE: Like a colleague in the same industry reaching out — not a salesperson.
+TONE: Like a colleague in the same industry reaching out, not a salesperson.
 
 CRITICAL: NEVER invent or fabricate information about the sender.
-- Only use the sender name, role, company, and context EXACTLY as provided
-- If the sender role says "Fundador", do NOT say "CEO", "Director", or anything else
+- Only use sender name, role, company, and context EXACTLY as provided
+- If the sender role says Fundador, do NOT say CEO, Director, or anything else
 - If a field is empty, do not mention it at all
-- Do NOT add titles, credentials, or claims that are not in the sender context
 
 Output ONLY the message text, nothing else."""
 
@@ -388,8 +390,15 @@ You're running an automated experiment loop (inspired by Karpathy's autoresearch
 ## Recent Messages and Outcomes:
 {chr(10).join(message_outcomes) if message_outcomes else "No message data yet."}
 
+## HARD CONSTRAINTS (never violate these):
+- The message must NEVER mention AI, tech, newsletters, automation, or any product/service
+- The message must NEVER ask about business challenges or technology usage
+- The message is purely about establishing a genuine professional connection
+- The message must detect the lead's profile language: if Spanish -> write in Spanish (tuteo), otherwise -> English
+- NEVER use forward slashes (/) or dashes (-, --) as separators
+
 ## Your Task:
-Analyze the experiment history and message outcomes. Propose ONE specific, small change to the prompt template that could improve acceptance rate.
+Analyze the experiment history and message outcomes. Propose ONE specific, small change to the prompt template that could improve acceptance rate. Focus on things like tone, structure, personalization approach, opening style, length, or question framing — but ALWAYS within the hard constraints above.
 
 Think about:
 - Which messages got accepted vs rejected? What patterns do you see?

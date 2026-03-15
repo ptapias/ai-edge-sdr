@@ -817,6 +817,11 @@ async def detect_connection_changes(db: Session):
             lead.connected_at = datetime.utcnow()
             if chat_id != "CONNECTED_NO_CHAT":
                 lead.linkedin_chat_id = chat_id
+
+            # AutoOutreach: record acceptance in experiment
+            exp_service = ExperimentService()
+            exp_service.record_acceptance(db, lead.id)
+
             connected_count += 1
             db.commit()
             logger.info(f"[ConnectionDetect] Standalone lead {lead.display_name} connected")
