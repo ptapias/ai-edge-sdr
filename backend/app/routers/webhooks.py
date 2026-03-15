@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
+# Statuses that indicate the lead could receive a connection acceptance
+_CONNECTABLE_STATUSES = [
+    LeadStatus.INVITATION_SENT.value,
+    LeadStatus.NEW.value,  # May have been left as 'new' due to DB errors
+    "pending",             # In case of custom statuses
+]
+
 
 @router.post("/unipile/connection")
 async def handle_new_connection(request: Request):
@@ -57,49 +64,91 @@ async def handle_new_connection(request: Request):
 
         user_id = linkedin_account.user_id
 
-        # Find matching lead by LinkedIn URL containing the public_identifier
+        # Find matching lead — search broadly, not just invitation_sent
         lead = None
+
+        # Strategy 1: Match by public_identifier in any connectable status
         if public_identifier:
             lead = db.query(Lead).filter(
                 Lead.user_id == user_id,
-                Lead.status == LeadStatus.INVITATION_SENT.value,
+                Lead.status.in_(_CONNECTABLE_STATUSES),
+                Lead.linkedin_url.ilike(f"%{public_identifier}%")
+            ).first()
+
+        # Strategy 2: Match by provider_id
+        if not lead and provider_id:
+            lead = db.query(Lead).filter(
+                Lead.user_id == user_id,
+                Lead.status.in_(_CONNECTABLE_STATUSES),
+                Lead.linkedin_url.ilike(f"%{provider_id}%")
+            ).first()
+
+        # Strategy 3: Last resort — match ANY lead with this URL regardless of status
+        # (except already connected ones)
+        if not lead and public_identifier:
+            lead = db.query(Lead).filter(
+                Lead.user_id == user_id,
+                Lead.status != LeadStatus.CONNECTED.value,
                 Lead.linkedin_url.ilike(f"%{public_identifier}%")
             ).first()
 
         if not lead and provider_id:
-            # Try matching by provider_id in linkedin_url
             lead = db.query(Lead).filter(
                 Lead.user_id == user_id,
-                Lead.status == LeadStatus.INVITATION_SENT.value,
+                Lead.status != LeadStatus.CONNECTED.value,
                 Lead.linkedin_url.ilike(f"%{provider_id}%")
             ).first()
 
         if not lead:
             logger.info(
                 f"[Webhook] Connection accepted by {full_name} ({public_identifier}) "
-                f"but no matching lead with invitation_sent status found"
+                f"but no matching lead found in database"
             )
             return {"status": "ok", "reason": "no matching lead"}
+
+        # Skip if already connected
+        if lead.status == LeadStatus.CONNECTED.value:
+            logger.info(f"[Webhook] Lead {lead.display_name} already marked as connected, skipping")
+            return {"status": "ok", "reason": "already connected"}
 
         # Update lead status
         lead.status = LeadStatus.CONNECTED.value
         lead.connected_at = datetime.utcnow()
 
+        # AutoOutreach: record acceptance in experiment
+        from ..services.experiment_service import ExperimentService
+        exp_service = ExperimentService()
+        exp_service.record_acceptance(db, lead.id)
+
         logger.info(
             f"[Webhook] Lead {lead.display_name} connected! "
-            f"(matched by {public_identifier or provider_id})"
+            f"(matched by {public_identifier or provider_id}, previous status: {lead.status})"
         )
 
-        # Check if lead is enrolled in a sequence waiting for connection
+        # Check if lead is enrolled in a sequence (active OR failed with already_invited)
         enrollment = db.query(SequenceEnrollment).filter(
             SequenceEnrollment.lead_id == lead.id,
-            SequenceEnrollment.status == EnrollmentStatus.ACTIVE.value,
-        ).first()
+            SequenceEnrollment.status.in_([
+                EnrollmentStatus.ACTIVE.value,
+                EnrollmentStatus.FAILED.value,  # May have failed with already_invited
+            ]),
+        ).order_by(SequenceEnrollment.enrolled_at.desc()).first()
 
         if enrollment:
             sequence = db.query(Sequence).filter(
                 Sequence.id == enrollment.sequence_id
             ).first()
+
+            # Reactivate failed enrollment if it was already_invited
+            if enrollment.status == EnrollmentStatus.FAILED.value:
+                enrollment.status = EnrollmentStatus.ACTIVE.value
+                enrollment.failed_reason = None
+                lead.active_sequence_id = enrollment.sequence_id
+                if sequence:
+                    sequence.active_enrolled = (sequence.active_enrolled or 0) + 1
+                logger.info(
+                    f"[Webhook] Reactivated failed enrollment for {lead.display_name}"
+                )
 
             if sequence and sequence.sequence_mode == SequenceMode.SMART_PIPELINE.value:
                 # Smart pipeline: set to apertura phase
@@ -113,6 +162,10 @@ async def handle_new_connection(request: Request):
                 # Classic sequence: advance to next step
                 enrollment.current_step_order += 1
                 enrollment.last_step_completed_at = datetime.utcnow()
+                enrollment.step_attempts = 0
+                enrollment.step_last_error = None
+                enrollment.step_error_category = None
+                enrollment.step_next_retry_at = None
 
                 next_step = db.query(SequenceStep).filter(
                     SequenceStep.sequence_id == enrollment.sequence_id,
@@ -151,7 +204,7 @@ async def handle_new_message(request: Request):
 
     logger.info(f"[Webhook] New message event received")
 
-    # For now, just log it. The detect_replies scheduler 
+    # For now, just log it. The detect_replies scheduler
     # will pick up the actual message content on next cycle.
     # This webhook mainly serves as a trigger to reduce polling.
 

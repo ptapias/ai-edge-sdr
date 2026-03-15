@@ -3,7 +3,6 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 interface ActivityData {
   date: string
   invitations: number
-  successful_invitations: number
   connections: number
 }
 

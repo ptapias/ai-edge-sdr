@@ -1,5 +1,6 @@
-import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Search, Users, BarChart3, Settings, Link2, MessageSquare, LogOut, Upload, LayoutGrid, GitBranch } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
+import { Search, Users, BarChart3, Settings, Link2, MessageSquare, LogOut, Upload, LayoutGrid, GitBranch, FlaskConical, FileText, ChevronDown } from 'lucide-react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import SearchPage from './pages/SearchPage'
@@ -11,11 +12,42 @@ import InboxPage from './pages/InboxPage'
 import ImportPage from './pages/ImportPage'
 import PipelinePage from './pages/PipelinePage'
 import SequencesPage from './pages/SequencesPage'
+import ExperimentsPage from './pages/ExperimentsPage'
+import DraftsPage from './pages/DraftsPage'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 
+const navClass = (isActive: boolean) =>
+  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
+    isActive
+      ? 'text-blue-600 bg-blue-50'
+      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+  }`
+
 function Navigation() {
   const { user, logout } = useAuth()
+  const location = useLocation()
+  const [leadsOpen, setLeadsOpen] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  const leadsRoutes = ['/search', '/leads', '/import']
+  const isLeadsActive = leadsRoutes.some(r => location.pathname === r || location.pathname.startsWith(r + '/'))
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setLeadsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  // Close dropdown on route change
+  useEffect(() => {
+    setLeadsOpen(false)
+  }, [location.pathname])
 
   return (
     <nav className="bg-white border-b border-gray-200">
@@ -25,121 +57,84 @@ function Navigation() {
             <div className="flex-shrink-0 flex items-center">
               <span className="text-xl font-bold text-blue-600">LinkedIn AI SDR</span>
             </div>
-            <div className="hidden sm:ml-8 sm:flex sm:space-x-4">
-              <NavLink
-                to="/"
-                className={({ isActive }) =>
-                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
-                    isActive
-                      ? 'text-blue-600 bg-blue-50'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`
-                }
-              >
+            <div className="hidden sm:ml-8 sm:flex sm:space-x-4 items-center">
+              <NavLink to="/" className={({ isActive }) => navClass(isActive)}>
                 <BarChart3 className="w-4 h-4 mr-2" />
                 Dashboard
               </NavLink>
-              <NavLink
-                to="/search"
-                className={({ isActive }) =>
-                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
-                    isActive
+
+              {/* Leads dropdown */}
+              <div className="relative" ref={dropdownRef}>
+                <button
+                  onClick={() => setLeadsOpen(!leadsOpen)}
+                  className={`inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
+                    isLeadsActive
                       ? 'text-blue-600 bg-blue-50'
                       : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`
-                }
-              >
-                <Search className="w-4 h-4 mr-2" />
-                Search Leads
-              </NavLink>
-              <NavLink
-                to="/leads"
-                className={({ isActive }) =>
-                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
-                    isActive
-                      ? 'text-blue-600 bg-blue-50'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`
-                }
-              >
-                <Users className="w-4 h-4 mr-2" />
-                Leads
-              </NavLink>
-              <NavLink
-                to="/pipeline"
-                className={({ isActive }) =>
-                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
-                    isActive
-                      ? 'text-blue-600 bg-blue-50'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`
-                }
-              >
+                  }`}
+                >
+                  <Users className="w-4 h-4 mr-2" />
+                  Leads
+                  <ChevronDown className={`w-3 h-3 ml-1 transition-transform ${leadsOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {leadsOpen && (
+                  <div className="absolute left-0 top-full mt-1 w-48 bg-white rounded-md shadow-lg border border-gray-200 py-1 z-50">
+                    <NavLink
+                      to="/search"
+                      className={({ isActive }) =>
+                        `flex items-center px-4 py-2 text-sm ${isActive ? 'text-blue-600 bg-blue-50' : 'text-gray-700 hover:bg-gray-50'}`
+                      }
+                    >
+                      <Search className="w-4 h-4 mr-3" />
+                      Buscar Leads
+                    </NavLink>
+                    <NavLink
+                      to="/leads"
+                      className={({ isActive }) =>
+                        `flex items-center px-4 py-2 text-sm ${isActive ? 'text-blue-600 bg-blue-50' : 'text-gray-700 hover:bg-gray-50'}`
+                      }
+                    >
+                      <Users className="w-4 h-4 mr-3" />
+                      Mis Leads
+                    </NavLink>
+                    <NavLink
+                      to="/import"
+                      className={({ isActive }) =>
+                        `flex items-center px-4 py-2 text-sm ${isActive ? 'text-blue-600 bg-blue-50' : 'text-gray-700 hover:bg-gray-50'}`
+                      }
+                    >
+                      <Upload className="w-4 h-4 mr-3" />
+                      Importar CSV
+                    </NavLink>
+                  </div>
+                )}
+              </div>
+
+              <NavLink to="/pipeline" className={({ isActive }) => navClass(isActive)}>
                 <LayoutGrid className="w-4 h-4 mr-2" />
                 Pipeline
               </NavLink>
-              <NavLink
-                to="/sequences"
-                className={({ isActive }) =>
-                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
-                    isActive
-                      ? 'text-blue-600 bg-blue-50'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`
-                }
-              >
+              <NavLink to="/sequences" className={({ isActive }) => navClass(isActive)}>
                 <GitBranch className="w-4 h-4 mr-2" />
                 Sequences
               </NavLink>
-              <NavLink
-                to="/import"
-                className={({ isActive }) =>
-                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
-                    isActive
-                      ? 'text-blue-600 bg-blue-50'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`
-                }
-              >
-                <Upload className="w-4 h-4 mr-2" />
-                Import
+              <NavLink to="/experiments" className={({ isActive }) => navClass(isActive)}>
+                <FlaskConical className="w-4 h-4 mr-2" />
+                AutoOutreach
               </NavLink>
-              <NavLink
-                to="/inbox"
-                className={({ isActive }) =>
-                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
-                    isActive
-                      ? 'text-blue-600 bg-blue-50'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`
-                }
-              >
+              <NavLink to="/drafts" className={({ isActive }) => navClass(isActive)}>
+                <FileText className="w-4 h-4 mr-2" />
+                Borradores
+              </NavLink>
+              <NavLink to="/inbox" className={({ isActive }) => navClass(isActive)}>
                 <MessageSquare className="w-4 h-4 mr-2" />
                 Inbox
               </NavLink>
-              <NavLink
-                to="/automation"
-                className={({ isActive }) =>
-                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
-                    isActive
-                      ? 'text-blue-600 bg-blue-50'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`
-                }
-              >
+              <NavLink to="/automation" className={({ isActive }) => navClass(isActive)}>
                 <Link2 className="w-4 h-4 mr-2" />
                 Connections
               </NavLink>
-              <NavLink
-                to="/settings"
-                className={({ isActive }) =>
-                  `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md ${
-                    isActive
-                      ? 'text-blue-600 bg-blue-50'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`
-                }
-              >
+              <NavLink to="/settings" className={({ isActive }) => navClass(isActive)}>
                 <Settings className="w-4 h-4 mr-2" />
                 Settings
               </NavLink>
@@ -252,6 +247,32 @@ function AppRoutes() {
               <Navigation />
               <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
                 <SequencesPage />
+              </main>
+            </div>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/experiments"
+        element={
+          <ProtectedRoute>
+            <div className="min-h-screen bg-gray-50">
+              <Navigation />
+              <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+                <ExperimentsPage />
+              </main>
+            </div>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/drafts"
+        element={
+          <ProtectedRoute>
+            <div className="min-h-screen bg-gray-50">
+              <Navigation />
+              <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+                <DraftsPage />
               </main>
             </div>
           </ProtectedRoute>

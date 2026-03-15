@@ -179,22 +179,22 @@ export default function DashboardPage() {
       {/* Section 2: Key Metrics Row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
-          title="Response Rate"
-          value={`${responseData?.response_rate ?? 0}%`}
-          icon={TrendingUp}
+          title="Acceptance Rate"
+          value={`${responseData?.acceptance_rate ?? 0}%`}
+          icon={CheckCircle}
           color="bg-green-500"
-          subtitle={`${responseData?.connected ?? 0} connected / ${responseData?.contacted ?? 0} contacted`}
+          subtitle={`${responseData?.connected ?? 0} accepted / ${responseData?.contacted ?? 0} contacted`}
         />
         <StatCard
           title="Avg. Time to Connect"
           value={responseData?.avg_days_to_connect != null ? `${responseData.avg_days_to_connect}d` : 'N/A'}
           icon={Clock}
           color="bg-blue-500"
-          subtitle="Days from invitation to connection"
+          subtitle="Days from invitation to acceptance"
         />
         <StatCard
           title="Active Conversations"
-          value={responseData?.in_conversation ?? 0}
+          value={responseData?.active_conversations ?? 0}
           icon={MessageSquare}
           color="bg-purple-500"
           subtitle={`${responseData?.conversation_rate ?? 0}% of connections`}
@@ -392,12 +392,12 @@ export default function DashboardPage() {
                   <th className="text-right py-2 px-3 text-xs font-medium text-gray-500 uppercase">Leads</th>
                   <th className="text-right py-2 px-3 text-xs font-medium text-gray-500 uppercase">Hot</th>
                   <th className="text-right py-2 px-3 text-xs font-medium text-gray-500 uppercase">Contacted</th>
-                  <th className="text-right py-2 px-3 text-xs font-medium text-gray-500 uppercase">Responded</th>
+                  <th className="text-right py-2 px-3 text-xs font-medium text-gray-500 uppercase">Accepted</th>
                   <th className="text-right py-2 px-3 text-xs font-medium text-gray-500 uppercase">Rate</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {campaignAnalytics.campaigns.slice(0, 10).map((c) => (
+                {campaignAnalytics.campaigns.slice(0, 10).map((c: any) => (
                   <tr key={c.id} className="hover:bg-gray-50">
                     <td className="py-2 px-3">
                       <Link to={`/leads?campaign_id=${c.id}`} className="font-medium text-gray-900 hover:text-blue-600">
@@ -409,10 +409,10 @@ export default function DashboardPage() {
                       <span className="text-orange-600 font-medium">{c.score_breakdown.hot || 0}</span>
                     </td>
                     <td className="text-right py-2 px-3 text-gray-600">{c.contacted}</td>
-                    <td className="text-right py-2 px-3 text-gray-600">{c.responded}</td>
+                    <td className="text-right py-2 px-3 text-gray-600">{c.accepted}</td>
                     <td className="text-right py-2 px-3">
-                      <span className={`font-medium ${c.response_rate > 30 ? 'text-green-600' : c.response_rate > 0 ? 'text-yellow-600' : 'text-gray-400'}`}>
-                        {c.response_rate}%
+                      <span className={`font-medium ${c.acceptance_rate > 30 ? 'text-green-600' : c.acceptance_rate > 0 ? 'text-yellow-600' : 'text-gray-400'}`}>
+                        {c.acceptance_rate}%
                       </span>
                     </td>
                   </tr>
@@ -463,7 +463,7 @@ export default function DashboardPage() {
           <div className="text-center py-4 text-gray-500">Loading...</div>
         ) : campaigns && campaigns.length > 0 ? (
           <div className="divide-y">
-            {campaigns.slice(0, 5).map((campaign) => (
+            {campaigns.slice(0, 5).map((campaign: any) => (
               <Link
                 key={campaign.id}
                 to={`/leads?campaign_id=${campaign.id}`}

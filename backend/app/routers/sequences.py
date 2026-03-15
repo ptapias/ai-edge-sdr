@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..dependencies import get_current_user
 from ..models import Lead, User
+from ..models.draft_message import DraftMessage, DraftStatus
 from ..models.sequence import (
     Sequence, SequenceStep, SequenceEnrollment,
     SequenceStatus, StepType, EnrollmentStatus,
@@ -565,9 +566,21 @@ async def list_enrollments(
 
     enrollments = query.order_by(SequenceEnrollment.enrolled_at.desc()).all()
 
+    # Pre-fetch pending drafts for all enrollments
+    enrollment_ids = [e.id for e in enrollments]
+    pending_drafts = {}
+    if enrollment_ids:
+        drafts = db.query(DraftMessage).filter(
+            DraftMessage.enrollment_id.in_(enrollment_ids),
+            DraftMessage.status == DraftStatus.PENDING.value,
+        ).all()
+        for d in drafts:
+            pending_drafts[d.enrollment_id] = d
+
     result = []
     for e in enrollments:
         lead = db.query(Lead).filter(Lead.id == e.lead_id).first()
+        draft = pending_drafts.get(e.id)
         result.append(EnrollmentResponse(
             id=e.id,
             sequence_id=e.sequence_id,
@@ -597,6 +610,11 @@ async def list_enrollments(
             # Lead intelligence
             lead_sentiment_level=lead.sentiment_level if lead else None,
             lead_signal_strength=lead.signal_strength if lead else None,
+            # Draft info
+            has_pending_draft=draft is not None,
+            pending_draft_id=draft.id if draft else None,
+            pending_draft_message=draft.generated_message if draft else None,
+            pending_draft_phase=draft.pipeline_phase if draft else None,
         ))
 
     return result
@@ -683,6 +701,7 @@ async def get_enrollment_detail(
 
 # ─── Stats ───────────────────────────────────────────────────────────────────
 
+
 @router.get("/{sequence_id}/stats", response_model=SequenceStatsResponse)
 async def get_sequence_stats(
     sequence_id: str,
@@ -710,48 +729,81 @@ async def get_sequence_stats(
     withdrawn = sum(1 for e in enrollments if e.status == EnrollmentStatus.WITHDRAWN.value)
     parked = sum(1 for e in enrollments if e.status == EnrollmentStatus.PARKED.value)
 
+    # "In progress" = active + paused (paused because sequence is paused, not failed)
+    in_progress = active + paused
+
     reply_rate = (replied / total * 100) if total > 0 else 0
     completion_rate = (completed / total * 100) if total > 0 else 0
 
-    # Steps breakdown (classic mode)
+    # Get lead data for connection stats
+    lead_ids = [e.lead_id for e in enrollments]
+    leads = db.query(Lead).filter(Lead.id.in_(lead_ids)).all() if lead_ids else []
+    lead_map = {l.id: l for l in leads}
+
+    invitations_sent = sum(1 for l in leads if l.connection_sent_at is not None)
+    connected_count = sum(1 for l in leads if l.connected_at is not None)
+    acceptance_rate = round((connected_count / invitations_sent * 100) if invitations_sent > 0 else 0, 1)
+
+    # Steps breakdown with real lead data
     steps = db.query(SequenceStep).filter(
         SequenceStep.sequence_id == sequence_id
     ).order_by(SequenceStep.step_order).all()
 
     steps_breakdown = []
     for step in steps:
-        reached = sum(1 for e in enrollments if e.current_step_order >= step.step_order)
-        step_completed = sum(1 for e in enrollments if e.current_step_order > step.step_order)
-        steps_breakdown.append({
-            "step_order": step.step_order,
-            "step_type": step.step_type,
-            "reached": reached,
-            "completed": step_completed,
-        })
+        if step.step_type == "connection_request":
+            sent = invitations_sent
+            pending = total - sent - failed
+            steps_breakdown.append({
+                "step_order": step.step_order,
+                "step_type": step.step_type,
+                "label": "Connection Request",
+                "sent": sent,
+                "pending": max(0, pending),
+                "failed": failed,
+                "connected": connected_count,
+                "reached": total,
+                "completed": sent,
+            })
+        else:
+            reached = sum(1 for e in enrollments if e.current_step_order >= step.step_order)
+            step_completed = sum(1 for e in enrollments if e.current_step_order > step.step_order)
+            pending_at_step = sum(1 for e in enrollments
+                if e.current_step_order == step.step_order
+                and e.status in [EnrollmentStatus.ACTIVE.value, EnrollmentStatus.PAUSED.value])
+            step_label = f"Follow-up {step.step_order - 1}" if step.step_order > 1 else "Message"
+            steps_breakdown.append({
+                "step_order": step.step_order,
+                "step_type": step.step_type,
+                "label": step_label,
+                "sent": step_completed,
+                "pending": pending_at_step,
+                "failed": 0,
+                "reached": reached,
+                "completed": step_completed,
+            })
 
     # Phase breakdown (smart pipeline mode)
     phase_breakdown = None
     is_pipeline = (sequence.sequence_mode or "classic") == SequenceMode.SMART_PIPELINE.value
     if is_pipeline:
-        active_enrollments = [e for e in enrollments if e.status in [
-            EnrollmentStatus.ACTIVE.value, EnrollmentStatus.PARKED.value
+        all_enrollments = [e for e in enrollments if e.status in [
+            EnrollmentStatus.ACTIVE.value, EnrollmentStatus.PAUSED.value
         ]]
         phase_breakdown = {
-            "awaiting_connection": sum(1 for e in active_enrollments if not e.current_phase),
-            "apertura": sum(1 for e in active_enrollments if e.current_phase == PipelinePhase.APERTURA.value),
-            "calificacion": sum(1 for e in active_enrollments if e.current_phase == PipelinePhase.CALIFICACION.value),
-            "valor": sum(1 for e in active_enrollments if e.current_phase == PipelinePhase.VALOR.value),
-            "nurture": sum(1 for e in active_enrollments if e.current_phase == PipelinePhase.NURTURE.value),
-            "reactivacion": sum(1 for e in active_enrollments if e.current_phase == PipelinePhase.REACTIVACION.value),
-            "meeting": sum(1 for e in enrollments if e.status == EnrollmentStatus.COMPLETED.value and getattr(e, '_meeting', False)),
+            "awaiting_connection": sum(1 for e in all_enrollments if not e.current_phase),
+            "apertura": sum(1 for e in all_enrollments if e.current_phase == PipelinePhase.APERTURA.value),
+            "calificacion": sum(1 for e in all_enrollments if e.current_phase == PipelinePhase.CALIFICACION.value),
+            "valor": sum(1 for e in all_enrollments if e.current_phase == PipelinePhase.VALOR.value),
+            "nurture": sum(1 for e in all_enrollments if e.current_phase == PipelinePhase.NURTURE.value),
+            "reactivacion": sum(1 for e in all_enrollments if e.current_phase == PipelinePhase.REACTIVACION.value),
             "parked": parked,
             "exited": sum(1 for e in enrollments if e.status == EnrollmentStatus.COMPLETED.value),
         }
-        # Count meetings from leads that reached MEETING_SCHEDULED status
         meeting_leads = 0
         for e in enrollments:
             if e.status == EnrollmentStatus.COMPLETED.value:
-                lead = db.query(Lead).filter(Lead.id == e.lead_id).first()
+                lead = lead_map.get(e.lead_id)
                 if lead and lead.status == "meeting_scheduled":
                     meeting_leads += 1
         phase_breakdown["meeting"] = meeting_leads
@@ -761,13 +813,16 @@ async def get_sequence_stats(
         sequence_name=sequence.name,
         sequence_mode=sequence.sequence_mode or "classic",
         total_enrolled=total,
-        active=active,
+        active=in_progress,
         completed=completed,
         replied=replied,
         failed=failed,
         paused=paused,
         withdrawn=withdrawn,
         parked=parked,
+        invitations_sent=invitations_sent,
+        connected=connected_count,
+        acceptance_rate=acceptance_rate,
         reply_rate=round(reply_rate, 1),
         completion_rate=round(completion_rate, 1),
         steps_breakdown=steps_breakdown,

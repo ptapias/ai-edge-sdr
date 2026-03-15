@@ -31,6 +31,8 @@ from .routers.analytics import router as analytics_router
 from .routers.intelligence import router as intelligence_router
 from .routers.sequences import router as sequences_router
 from .routers.webhooks import router as webhooks_router
+from .routers.experiments import router as experiments_router
+from .routers.drafts import router as drafts_router
 
 # Configure logging
 logging.basicConfig(
@@ -102,6 +104,8 @@ app.include_router(analytics_router)
 app.include_router(intelligence_router)
 app.include_router(sequences_router)
 app.include_router(webhooks_router)
+app.include_router(experiments_router)
+app.include_router(drafts_router)
 
 
 @app.get("/api")

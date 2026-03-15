@@ -435,6 +435,58 @@ class AnalyzeConversationRequest(BaseModel):
     conversation_history: str  # Formatted conversation history
 
 
+@router.get("/reply-prompt")
+def get_current_reply_prompt(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get the current reply prompt (from default business profile)."""
+    from ..services.claude_service import ClaudeService
+    profile = db.query(BusinessProfile).filter(
+        BusinessProfile.is_default == True,
+        BusinessProfile.user_id == current_user.id
+    ).first()
+
+    return {
+        "reply_prompt": profile.reply_prompt if profile and profile.reply_prompt else ClaudeService.DEFAULT_REPLY_PROMPT,
+        "is_custom": bool(profile and profile.reply_prompt),
+        "profile_id": profile.id if profile else None,
+        "profile_name": profile.name if profile else None
+    }
+
+
+@router.put("/reply-prompt")
+def update_current_reply_prompt(
+    request: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update the reply prompt on the default business profile."""
+    from ..services.claude_service import ClaudeService
+    profile = db.query(BusinessProfile).filter(
+        BusinessProfile.is_default == True,
+        BusinessProfile.user_id == current_user.id
+    ).first()
+
+    if not profile:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="No default business profile found")
+
+    new_prompt = request.get("reply_prompt")
+    if new_prompt == "" or new_prompt is None:
+        profile.reply_prompt = None
+    else:
+        profile.reply_prompt = new_prompt
+
+    db.commit()
+
+    return {
+        "reply_prompt": profile.reply_prompt or ClaudeService.DEFAULT_REPLY_PROMPT,
+        "is_custom": profile.reply_prompt is not None,
+        "profile_id": profile.id
+    }
+
+
 @router.post("/generate-reply")
 def generate_conversation_reply(
     request: GenerateReplyRequest,
@@ -475,7 +527,8 @@ def generate_conversation_reply(
     reply = claude.generate_conversation_reply(
         conversation_history=request.conversation_history,
         contact_info=contact_info,
-        sender_context=sender_context
+        sender_context=sender_context,
+        custom_prompt=profile.reply_prompt if profile else None
     )
 
     return {

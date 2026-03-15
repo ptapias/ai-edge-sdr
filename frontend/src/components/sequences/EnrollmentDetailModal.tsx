@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   X,
   Loader2,
@@ -14,12 +15,21 @@ import {
   ArrowRight,
   AlertCircle,
   Signal,
+  FileText,
+  Send,
+  XCircle,
+  RefreshCw,
+  CheckCircle2,
+  Edit3,
 } from 'lucide-react'
 import { getEnrollmentDetail } from '../../services/api'
+import type { SequenceEnrollment } from '../../services/api'
 
 interface EnrollmentDetailModalProps {
   sequenceId: string
   enrollmentId: string
+  isPipeline?: boolean
+  enrollment?: SequenceEnrollment | null
   onClose: () => void
 }
 
@@ -69,14 +79,89 @@ function formatRelativeTime(dateString: string | null | undefined) {
   return date.toLocaleDateString('es-ES', { month: 'short', day: 'numeric' })
 }
 
+async function approveDraft(draftId: string, finalMessage?: string) {
+  const token = localStorage.getItem('access_token')
+  const res = await fetch(`/api/drafts/${draftId}/approve`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ final_message: finalMessage }),
+  })
+  if (!res.ok) throw new Error('Failed to approve draft')
+  return res.json()
+}
+
+async function rejectDraft(draftId: string, reason?: string) {
+  const token = localStorage.getItem('access_token')
+  const res = await fetch(`/api/drafts/${draftId}/reject`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  })
+  if (!res.ok) throw new Error('Failed to reject draft')
+  return res.json()
+}
+
+async function regenerateDraft(draftId: string) {
+  const token = localStorage.getItem('access_token')
+  const res = await fetch(`/api/drafts/${draftId}/regenerate`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error('Failed to regenerate draft')
+  return res.json()
+}
+
 export default function EnrollmentDetailModal({
   sequenceId,
   enrollmentId,
+  isPipeline = false,
+  enrollment,
   onClose,
 }: EnrollmentDetailModalProps) {
+  const queryClient = useQueryClient()
+  const [draftMessage, setDraftMessage] = useState('')
+  const [isEditing, setIsEditing] = useState(false)
+
   const { data: detail, isLoading } = useQuery({
     queryKey: ['enrollment-detail', sequenceId, enrollmentId],
     queryFn: () => getEnrollmentDetail(enrollmentId),
+  })
+
+  const hasDraft = enrollment?.has_pending_draft && enrollment?.pending_draft_id
+  const draftId = enrollment?.pending_draft_id
+  const draftPhase = enrollment?.pending_draft_phase
+
+  // Initialize draft message when enrollment data arrives
+  if (hasDraft && enrollment?.pending_draft_message && !draftMessage && !isEditing) {
+    setDraftMessage(enrollment.pending_draft_message)
+  }
+
+  const approveMutation = useMutation({
+    mutationFn: () => approveDraft(draftId!, isEditing ? draftMessage : undefined),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['enrollments', sequenceId] })
+      queryClient.invalidateQueries({ queryKey: ['enrollment-detail'] })
+      queryClient.invalidateQueries({ queryKey: ['sequence-stats'] })
+      onClose()
+    },
+  })
+
+  const rejectMutation = useMutation({
+    mutationFn: () => rejectDraft(draftId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['enrollments', sequenceId] })
+      queryClient.invalidateQueries({ queryKey: ['enrollment-detail'] })
+      onClose()
+    },
+  })
+
+  const regenerateMutation = useMutation({
+    mutationFn: () => regenerateDraft(draftId!),
+    onSuccess: (data) => {
+      setDraftMessage(data.generated_message || '')
+      setIsEditing(false)
+      queryClient.invalidateQueries({ queryKey: ['enrollments', sequenceId] })
+    },
   })
 
   return (
@@ -86,7 +171,9 @@ export default function EnrollmentDetailModal({
         <div className="p-4 border-b flex items-center justify-between flex-shrink-0">
           <div>
             <h3 className="text-lg font-semibold text-gray-900">Enrollment Detail</h3>
-            <p className="text-sm text-gray-500">Pipeline supervision & message history</p>
+            <p className="text-sm text-gray-500">
+              {isPipeline ? 'Pipeline supervision & message history' : 'Sequence progress'}
+            </p>
           </div>
           <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
             <X className="w-5 h-5 text-gray-400" />
@@ -106,6 +193,104 @@ export default function EnrollmentDetailModal({
             </div>
           ) : (
             <>
+              {/* Pending Draft - shown prominently at top */}
+              {hasDraft && (
+                <div className="border-2 border-amber-300 rounded-lg p-4 bg-amber-50">
+                  <div className="flex items-center gap-2 mb-3">
+                    <FileText className="w-5 h-5 text-amber-600" />
+                    <h4 className="text-sm font-semibold text-amber-900">
+                      Draft Message Pending Approval
+                    </h4>
+                    {draftPhase && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-amber-200 text-amber-800">
+                        {phaseLabels[draftPhase] || draftPhase}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Editable draft message */}
+                  {isEditing ? (
+                    <textarea
+                      value={draftMessage}
+                      onChange={(e) => setDraftMessage(e.target.value)}
+                      className="w-full p-3 border rounded-lg text-sm text-gray-800 resize-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400"
+                      rows={5}
+                    />
+                  ) : (
+                    <div
+                      className="bg-white rounded-lg p-3 text-sm text-gray-800 whitespace-pre-wrap border cursor-pointer hover:border-amber-400 transition-colors"
+                      onClick={() => setIsEditing(true)}
+                      title="Click to edit"
+                    >
+                      {draftMessage || enrollment?.pending_draft_message}
+                      <p className="text-[10px] text-gray-400 mt-2 italic">Click to edit before sending</p>
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div className="flex items-center gap-2 mt-3">
+                    <button
+                      onClick={() => approveMutation.mutate()}
+                      disabled={approveMutation.isPending}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+                    >
+                      {approveMutation.isPending ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Send className="w-3.5 h-3.5" />
+                      )}
+                      Approve & Send
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (isEditing) setIsEditing(false)
+                        else setIsEditing(true)
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      {isEditing ? 'Preview' : 'Edit'}
+                    </button>
+                    <button
+                      onClick={() => regenerateMutation.mutate()}
+                      disabled={regenerateMutation.isPending}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      {regenerateMutation.isPending ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      )}
+                      Regenerate
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (confirm('Reject this draft? The enrollment will stay paused.')) {
+                          rejectMutation.mutate()
+                        }
+                      }}
+                      disabled={rejectMutation.isPending}
+                      className="flex items-center gap-1.5 px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg text-sm font-medium border border-transparent hover:border-red-200"
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                      Reject
+                    </button>
+                  </div>
+
+                  {(approveMutation.isError || rejectMutation.isError) && (
+                    <p className="text-xs text-red-500 mt-2">
+                      Action failed. Please try again.
+                    </p>
+                  )}
+                  {approveMutation.isSuccess && (
+                    <p className="text-xs text-green-600 mt-2 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" />
+                      Message sent successfully!
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Lead Info + Intelligence */}
               <div className="border rounded-lg p-4">
                 <div className="flex items-start justify-between">
@@ -129,7 +314,6 @@ export default function EnrollmentDetailModal({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {/* Sentiment badge */}
                     {detail.lead_sentiment_level && sentimentConfig[detail.lead_sentiment_level] && (() => {
                       const sc = sentimentConfig[detail.lead_sentiment_level!]
                       const SentIcon = sc.icon
@@ -141,7 +325,6 @@ export default function EnrollmentDetailModal({
                       )
                     })()}
 
-                    {/* Signal badge */}
                     {detail.lead_signal_strength && signalConfig[detail.lead_signal_strength] && (
                       <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${signalConfig[detail.lead_signal_strength].bg} ${signalConfig[detail.lead_signal_strength].color}`}>
                         <Signal className="w-3 h-3" />
@@ -151,22 +334,22 @@ export default function EnrollmentDetailModal({
                   </div>
                 </div>
 
-                {/* Current status bar */}
-                <div className="mt-3 pt-3 border-t flex items-center gap-4 text-xs text-gray-500">
-                  {detail.current_phase && (
-                    <span className="flex items-center gap-1">
-                      <TrendingUp className="w-3 h-3" />
-                      Phase: <strong className="text-gray-700">{phaseLabels[detail.current_phase] || detail.current_phase}</strong>
-                    </span>
-                  )}
-                  <span>Msgs in phase: <strong className="text-gray-700">{detail.messages_in_phase}/2</strong></span>
-                  <span>Total sent: <strong className="text-gray-700">{detail.total_messages_sent}</strong></span>
-                  {detail.phase_entered_at && (
-                    <span>In phase: <strong className="text-gray-700">{formatRelativeTime(detail.phase_entered_at)}</strong></span>
-                  )}
-                </div>
+                {isPipeline && (
+                  <div className="mt-3 pt-3 border-t flex items-center gap-4 text-xs text-gray-500">
+                    {detail.current_phase && (
+                      <span className="flex items-center gap-1">
+                        <TrendingUp className="w-3 h-3" />
+                        Phase: <strong className="text-gray-700">{phaseLabels[detail.current_phase] || detail.current_phase}</strong>
+                      </span>
+                    )}
+                    <span>Msgs in phase: <strong className="text-gray-700">{detail.messages_in_phase}/2</strong></span>
+                    <span>Total sent: <strong className="text-gray-700">{detail.total_messages_sent}</strong></span>
+                    {detail.phase_entered_at && (
+                      <span>In phase: <strong className="text-gray-700">{formatRelativeTime(detail.phase_entered_at)}</strong></span>
+                    )}
+                  </div>
+                )}
 
-                {/* Buying signals */}
                 {detail.lead_buying_signals && detail.lead_buying_signals.length > 0 && (
                   <div className="mt-3 pt-3 border-t">
                     <p className="text-xs font-medium text-gray-500 mb-1">Buying Signals</p>
@@ -214,7 +397,6 @@ export default function EnrollmentDetailModal({
                   </div>
                 )}
 
-                {/* Last response from lead */}
                 {detail.last_response_text && (
                   <div className="mt-4 pt-3 border-t">
                     <div className="flex items-center gap-2 mb-2">
@@ -241,7 +423,6 @@ export default function EnrollmentDetailModal({
                     </div>
 
                     <div className="space-y-3">
-                      {/* Outcome */}
                       {analysis.outcome && (
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-gray-500 w-20">Decision:</span>
@@ -262,7 +443,6 @@ export default function EnrollmentDetailModal({
                         </div>
                       )}
 
-                      {/* Reason */}
                       {analysis.reason && (
                         <div>
                           <span className="text-xs text-gray-500">Reasoning:</span>
@@ -272,7 +452,6 @@ export default function EnrollmentDetailModal({
                         </div>
                       )}
 
-                      {/* Suggested angle */}
                       {analysis.suggested_angle && (
                         <div>
                           <span className="text-xs text-gray-500">Suggested angle for next message:</span>
@@ -282,7 +461,6 @@ export default function EnrollmentDetailModal({
                         </div>
                       )}
 
-                      {/* Sentiment & signals from analysis */}
                       <div className="flex items-center gap-4 text-xs text-gray-500">
                         {analysis.sentiment && (
                           <span>Sentiment: <strong className="text-gray-700">{analysis.sentiment}</strong></span>

@@ -29,12 +29,14 @@ function ScoreIcon({ label }: { label: string | null }) {
   return null
 }
 
-function ConversationIndicator({ status }: { status: 'responded' | 'awaiting' | 'no_contact' }) {
-  const config = {
-    responded: { color: 'bg-green-500', title: 'Has conversation' },
-    awaiting: { color: 'bg-orange-400', title: 'Awaiting response' },
-    no_contact: { color: 'bg-gray-300', title: 'No contact' },
-  }[status]
+function ConversationIndicator({ status }: { status: string }) {
+  const configs: Record<string, { color: string; title: string }> = {
+    awaiting_reply: { color: 'bg-yellow-400', title: 'Esperando su respuesta' },
+    needs_reply: { color: 'bg-blue-500', title: 'Te ha respondido' },
+    awaiting_connection: { color: 'bg-orange-400', title: 'Invitación pendiente' },
+    no_contact: { color: 'bg-gray-300', title: 'Sin contacto' },
+  }
+  const config = configs[status] || configs.no_contact
 
   return (
     <span className={`w-2 h-2 rounded-full ${config.color} flex-shrink-0`} title={config.title} />
@@ -83,12 +85,17 @@ function LeadCard({
           {lead.has_conversation && <MessageSquare className="w-3 h-3 text-green-500" />}
         </div>
       </div>
-      {lead.last_activity && (
+      {lead.next_action ? (
+        <p className="text-xs text-blue-600 mt-2 flex items-center font-medium">
+          <Clock className="w-3 h-3 mr-1" />
+          {lead.next_action}
+        </p>
+      ) : lead.last_activity ? (
         <p className="text-xs text-gray-400 mt-2 flex items-center">
           <Clock className="w-3 h-3 mr-1" />
           {formatLastActivity(lead.last_activity)}
         </p>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -143,8 +150,11 @@ function LeadDetailSidebar({
               <p className="text-xs text-gray-500 mb-1">Conversation</p>
               <div className="flex items-center gap-2">
                 <ConversationIndicator status={lead.response_status} />
-                <span className="text-sm font-medium capitalize">
-                  {lead.response_status.replace('_', ' ')}
+                <span className="text-sm font-medium">
+                  {lead.response_status === 'awaiting_reply' ? 'Esperando respuesta' :
+                   lead.response_status === 'needs_reply' ? 'Te ha respondido' :
+                   lead.response_status === 'awaiting_connection' ? 'Invitación enviada' :
+                   'Sin contacto'}
                 </span>
               </div>
             </div>

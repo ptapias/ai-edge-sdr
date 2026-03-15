@@ -15,6 +15,7 @@ import {
   Flame,
   Thermometer,
   Snowflake,
+  FileText,
 } from 'lucide-react'
 import { getEnrollments, unenrollLeads } from '../../services/api'
 import type { SequenceEnrollment } from '../../services/api'
@@ -63,7 +64,6 @@ function formatRelative(dateString: string | null | undefined) {
   const diffDays = Math.floor(diffMs / 86400000)
 
   if (diffMs < 0) {
-    // Future date (next step due)
     const absMins = Math.abs(diffMins)
     const absHours = Math.abs(diffHours)
     const absDays = Math.abs(diffDays)
@@ -131,6 +131,9 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
     }
   }
 
+  // Count pending drafts
+  const pendingDraftCount = enrollments?.filter((e: SequenceEnrollment) => e.has_pending_draft).length || 0
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-40">
@@ -141,6 +144,21 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
 
   return (
     <div>
+      {/* Pending drafts banner */}
+      {pendingDraftCount > 0 && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center gap-3">
+          <FileText className="w-5 h-5 text-amber-600 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-amber-900">
+              {pendingDraftCount} draft{pendingDraftCount > 1 ? 's' : ''} pending approval
+            </p>
+            <p className="text-xs text-amber-700">
+              Click on the lead to review and approve the AI-generated message
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
@@ -225,6 +243,7 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
                 const StatusIcon = config.icon
                 const canSelect = enrollment.status === 'active' || enrollment.status === 'paused'
                 const phase = enrollment.current_phase ? phaseConfig[enrollment.current_phase] : null
+                const hasDraft = enrollment.has_pending_draft
 
                 return (
                   <tr
@@ -232,7 +251,9 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
                     onClick={() => setSelectedDetailId(enrollment.id)}
                     className={`hover:bg-gray-50 cursor-pointer ${
                       selectedEnrollments.has(enrollment.lead_id) ? 'bg-blue-50' : ''
-                    } ${enrollment.status === 'replied' ? 'bg-orange-50/50' : ''}`}
+                    } ${enrollment.status === 'replied' ? 'bg-orange-50/50' : ''} ${
+                      hasDraft ? 'bg-amber-50/50' : ''
+                    }`}
                   >
                     <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
                       {canSelect && (
@@ -246,9 +267,17 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
                     </td>
                     <td className="px-4 py-2.5">
                       <div>
-                        <p className="text-sm font-medium text-gray-900">
-                          {enrollment.lead_name || 'Unknown Lead'}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-medium text-gray-900">
+                            {enrollment.lead_name || 'Unknown Lead'}
+                          </p>
+                          {hasDraft && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 animate-pulse">
+                              <FileText className="w-2.5 h-2.5" />
+                              Draft
+                            </span>
+                          )}
+                        </div>
                         {enrollment.lead_job_title && (
                           <p className="text-xs text-gray-500">{enrollment.lead_job_title}</p>
                         )}
@@ -345,6 +374,8 @@ export default function EnrollmentTable({ sequenceId, isPipeline = false }: Enro
         <EnrollmentDetailModal
           sequenceId={sequenceId}
           enrollmentId={selectedDetailId}
+          isPipeline={isPipeline}
+          enrollment={enrollments?.find((e: SequenceEnrollment) => e.id === selectedDetailId) || null}
           onClose={() => setSelectedDetailId(null)}
         />
       )}

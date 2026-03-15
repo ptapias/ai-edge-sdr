@@ -393,14 +393,14 @@ def get_invitation_stats(
     success_rate = (successful_count / total_attempts * 100) if total_attempts > 0 else 0
 
     # Acceptance rate (actual LinkedIn acceptances)
-    # Count leads that have been sent invitations vs those who connected (for current user)
+    # Count leads that have been sent invitations vs those who accepted (connected, in_conversation, replied, etc.)
     sent_count = db.query(Lead).filter(
         Lead.user_id == current_user.id,
         Lead.status == "invitation_sent"
     ).count()
     connected_count = db.query(Lead).filter(
         Lead.user_id == current_user.id,
-        Lead.status == "connected"
+        Lead.status.in_(["connected", "in_conversation", "replied", "interested", "negotiating"])
     ).count()
     total_invited = sent_count + connected_count
     acceptance_rate = (connected_count / total_invited * 100) if total_invited > 0 else 0

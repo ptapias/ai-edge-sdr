@@ -82,7 +82,7 @@ def classify_invitation_error(error_text: str, status_code: int = 0) -> Invitati
         return InvitationErrorCategory.RATE_LIMIT_DAILY
 
     # Profile problems
-    if any(kw in error_lower for kw in ["not found", "does not exist", "invalid profile", "profile unavailable"]):
+    if any(kw in error_lower for kw in ["not found", "does not exist", "invalid profile", "profile unavailable","invalid_recipient", "cannot be reached", "recipient cannot"]):
         return InvitationErrorCategory.INVALID_PROFILE
     if status_code == 404:
         return InvitationErrorCategory.INVALID_PROFILE

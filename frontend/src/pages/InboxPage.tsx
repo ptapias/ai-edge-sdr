@@ -16,7 +16,11 @@ import {
   Thermometer,
   Snowflake,
   AlertTriangle,
-  GitBranch
+  GitBranch,
+  Settings,
+  X,
+  RotateCcw,
+  FileText
 } from 'lucide-react'
 import {
   getLinkedInChats,
@@ -28,6 +32,30 @@ import {
   type Lead,
   type ConversationAnalysis
 } from '../services/api'
+
+// API helpers for reply prompt
+const getReplyPrompt = async () => {
+
+
+  const response = await fetch('/api/linkedin/reply-prompt', {
+    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+  })
+  if (!response.ok) throw new Error('Failed to fetch')
+  return response.json()
+}
+
+const updateReplyPrompt = async (prompt: string | null) => {
+  const response = await fetch('/api/linkedin/reply-prompt', {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ reply_prompt: prompt })
+  })
+  if (!response.ok) throw new Error('Failed to update')
+  return response.json()
+}
 
 // Unipile API attendee structure
 interface Attendee {
@@ -235,14 +263,56 @@ export default function InboxPage() {
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null)
   const [messageText, setMessageText] = useState('')
   const [generatingReply, setGeneratingReply] = useState(false)
+  const [showPromptEditor, setShowPromptEditor] = useState(false)
+  const [promptText, setPromptText] = useState('')
+  const [promptLoading, setPromptLoading] = useState(false)
+  const [promptSaving, setPromptSaving] = useState(false)
+  const [promptIsCustom, setPromptIsCustom] = useState(false)
   // Cache analysis per chat ID
   const [analysisCache, setAnalysisCache] = useState<Record<string, ConversationAnalysis>>({})
   const [analyzingConversation, setAnalyzingConversation] = useState(false)
   const [forceRefreshing, setForceRefreshing] = useState(false)
+  const [activeDraft, setActiveDraft] = useState<{id: string, message: string, phase: string | null, sequenceName: string} | null>(null)
+  const [approvingDraft, setApprovingDraft] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Get cached analysis for current chat
   const conversationAnalysis = selectedChat ? analysisCache[selectedChat.id] : null
+
+  // Check for pending pipeline draft when chat changes
+  useEffect(() => {
+    if (!selectedChat) {
+      setActiveDraft(null)
+      return
+    }
+    const fetchDraft = async () => {
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(`/api/drafts/pending-for-chat?chat_id=${selectedChat.id}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+        if (res.ok) {
+          const data = await res.json()
+          if (data && data.id) {
+            setActiveDraft({
+              id: data.id,
+              message: data.generated_message,
+              phase: data.pipeline_phase,
+              sequenceName: data.sequence_name,
+            })
+            setMessageText(data.generated_message)
+          } else {
+            setActiveDraft(null)
+          }
+        } else {
+          setActiveDraft(null)
+        }
+      } catch {
+        setActiveDraft(null)
+      }
+    }
+    fetchDraft()
+  }, [selectedChat?.id])
 
   // Fetch chats - uses backend cache (30-60 min)
   // refetchInterval is disabled since backend handles caching
@@ -338,8 +408,43 @@ export default function InboxPage() {
     )
   }
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!selectedChat || !messageText.trim()) return
+
+    // If there's an active pipeline draft, use the approve endpoint
+    if (activeDraft) {
+      setApprovingDraft(true)
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch(`/api/drafts/${activeDraft.id}/approve`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ message: messageText.trim() })
+        })
+        if (res.ok) {
+          setMessageText('')
+          setActiveDraft(null)
+          // Refresh messages and chats
+          queryClient.invalidateQueries({ queryKey: ['chat-messages', selectedChat.id] })
+          queryClient.invalidateQueries({ queryKey: ['linkedin-chats'] })
+          queryClient.invalidateQueries({ queryKey: ['enrollments'] })
+          queryClient.invalidateQueries({ queryKey: ['sequence-stats'] })
+        } else {
+          const err = await res.json().catch(() => ({}))
+          alert('Failed to send: ' + (err.detail || 'Unknown error'))
+        }
+      } catch (e) {
+        alert('Failed to send draft')
+      } finally {
+        setApprovingDraft(false)
+      }
+      return
+    }
+
+    // Normal send
     sendMutation.mutate({ chatId: selectedChat.id, text: messageText.trim() })
   }
 
@@ -726,6 +831,90 @@ export default function InboxPage() {
               {/* Message Input */}
               <div className="p-4 border-t">
                 <div className="flex gap-2">
+                  {/* Prompt Editor Modal */}
+                  {showPromptEditor && (
+                    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+                        <div className="flex items-center justify-between p-4 border-b">
+                          <div>
+                            <h3 className="font-semibold text-lg">Prompt de Respuesta IA</h3>
+                            <p className="text-sm text-gray-500">
+                              {promptIsCustom ? 'Prompt personalizado' : 'Prompt por defecto'}
+                            </p>
+                          </div>
+                          <button onClick={() => setShowPromptEditor(false)} className="text-gray-400 hover:text-gray-600">
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                        <div className="flex-1 overflow-auto p-4">
+                          <textarea
+                            value={promptText}
+                            onChange={(e) => setPromptText(e.target.value)}
+                            className="w-full h-80 input font-mono text-sm resize-none"
+                            placeholder="Escribe el prompt para generar respuestas..."
+                          />
+                        </div>
+                        <div className="flex items-center justify-between p-4 border-t bg-gray-50 rounded-b-lg">
+                          <button
+                            onClick={async () => {
+                              setPromptSaving(true)
+                              try {
+                                const result = await updateReplyPrompt(null)
+                                setPromptText(result.reply_prompt)
+                                setPromptIsCustom(false)
+                              } catch (e) { console.error(e) }
+                              finally { setPromptSaving(false) }
+                            }}
+                            disabled={promptSaving}
+                            className="btn btn-secondary flex items-center gap-1 text-sm"
+                          >
+                            <RotateCcw className="w-3 h-3" /> Restaurar default
+                          </button>
+                          <div className="flex gap-2">
+                            <button onClick={() => setShowPromptEditor(false)} className="btn btn-secondary text-sm">
+                              Cancelar
+                            </button>
+                            <button
+                              onClick={async () => {
+                                setPromptSaving(true)
+                                try {
+                                  const result = await updateReplyPrompt(promptText)
+                                  setPromptIsCustom(result.is_custom)
+                                  setShowPromptEditor(false)
+                                } catch (e) { console.error(e) }
+                                finally { setPromptSaving(false) }
+                              }}
+                              disabled={promptSaving}
+                              className="btn btn-primary text-sm"
+                            >
+                              {promptSaving ? 'Guardando...' : 'Guardar'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <button
+                    onClick={async () => {
+                      setPromptLoading(true)
+                      try {
+                        const result = await getReplyPrompt()
+                        setPromptText(result.reply_prompt)
+                        setPromptIsCustom(result.is_custom)
+                        setShowPromptEditor(true)
+                      } catch (e) { console.error(e) }
+                      finally { setPromptLoading(false) }
+                    }}
+                    disabled={promptLoading}
+                    className="btn btn-secondary flex items-center"
+                    title="Ver/editar prompt de respuesta IA"
+                  >
+                    {promptLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Settings className="w-4 h-4" />
+                    )}
+                  </button>
                   <button
                     onClick={async () => {
                       if (!selectedChat || sortedMessages.length === 0) return
@@ -773,22 +962,45 @@ export default function InboxPage() {
                     value={messageText}
                     onChange={(e) => setMessageText(e.target.value)}
                     onKeyPress={handleKeyPress}
-                    placeholder="Type a message..."
-                    className="flex-1 input resize-none"
+                    placeholder={activeDraft ? "Pipeline draft loaded - edit or send as is..." : "Type a message..."}
+                    className={"flex-1 input resize-none" + (activeDraft ? " border-amber-300 bg-amber-50/50" : "")}
                     rows={2}
                   />
                   <button
                     onClick={handleSendMessage}
-                    disabled={!messageText.trim() || sendMutation.isPending}
-                    className="btn btn-primary flex items-center"
+                    disabled={!messageText.trim() || sendMutation.isPending || approvingDraft}
+                    className={activeDraft ? "btn flex items-center gap-1.5 bg-green-600 text-white hover:bg-green-700" : "btn btn-primary flex items-center"}
+                    title={activeDraft ? "Approve pipeline draft and send" : "Send message"}
                   >
-                    {sendMutation.isPending ? (
+                    {(sendMutation.isPending || approvingDraft) ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
                       <Send className="w-4 h-4" />
                     )}
                   </button>
                 </div>
+                {/* Pipeline draft banner */}
+                {activeDraft && (
+                  <div className="flex items-center gap-2 mt-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+                    <FileText className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-amber-900">
+                        Smart Pipeline draft ready
+                        {activeDraft.phase && <span className="ml-1 text-amber-600">({activeDraft.phase})</span>}
+                      </p>
+                      <p className="text-[10px] text-amber-700 truncate">
+                        From: {activeDraft.sequenceName} — Edit the text above and send when ready
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => { setActiveDraft(null); setMessageText('') }}
+                      className="text-amber-400 hover:text-amber-600 flex-shrink-0"
+                      title="Dismiss draft"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
                 {sendMutation.isError && (
                   <p className="text-red-500 text-sm mt-2">
                     Failed to send message. Please try again.

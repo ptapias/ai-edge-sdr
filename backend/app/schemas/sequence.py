@@ -139,6 +139,11 @@ class EnrollmentResponse(BaseModel):
     # Lead intelligence (from Lead model)
     lead_sentiment_level: Optional[str] = None
     lead_signal_strength: Optional[str] = None
+    # Draft info
+    has_pending_draft: bool = False
+    pending_draft_id: Optional[str] = None
+    pending_draft_message: Optional[str] = None
+    pending_draft_phase: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -167,10 +172,13 @@ class SequenceStatsResponse(BaseModel):
     paused: int
     withdrawn: int
     parked: int = 0
-    reply_rate: float  # percentage
-    completion_rate: float  # percentage
-    steps_breakdown: List[dict]  # [{step_order, step_type, reached, completed}]
-    phase_breakdown: Optional[dict] = None  # Smart pipeline: {phase: count}
+    invitations_sent: int = 0
+    connected: int = 0
+    acceptance_rate: float = 0
+    reply_rate: float = 0
+    completion_rate: float = 0
+    steps_breakdown: List[dict] = []
+    phase_breakdown: Optional[dict] = None
 
 
 class SequenceDashboardResponse(BaseModel):

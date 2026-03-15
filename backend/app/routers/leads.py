@@ -16,7 +16,10 @@ from ..schemas.lead import (
     LeadResponse, LeadUpdate, LeadScoring, LeadListResponse,
     LeadStatusUpdate, LeadStatusInfo, LeadBulkStatusUpdate, LeadStatusEnum
 )
-from ..models import Lead, BusinessProfile, User
+from ..models import Lead
+from ..models.sequence import SequenceEnrollment
+from ..models.business_profile import BusinessProfile
+from ..models.user import User
 from ..models.lead import LeadStatus, LEAD_STATUS_CONFIG
 from ..services.claude_service import ClaudeService
 from ..services.verifier_service import VerifierService
@@ -78,6 +81,17 @@ def get_pipeline_leads(
         .all()
     )
 
+    # Pre-fetch active enrollments for next_action info
+    lead_ids = [l.id for l in leads]
+    enrollments_map = {}
+    if lead_ids:
+        enrollments = db.query(SequenceEnrollment).filter(
+            SequenceEnrollment.lead_id.in_(lead_ids),
+            SequenceEnrollment.status.in_(["active", "paused"]),
+        ).all()
+        for e in enrollments:
+            enrollments_map[e.lead_id] = e
+
     pipeline = {}
     for lead in leads:
         status = lead.status
@@ -85,12 +99,48 @@ def get_pipeline_leads(
             pipeline[status] = []
 
         has_conversation = lead.linkedin_chat_id is not None
-        if has_conversation:
-            response_status = "responded"
-        elif lead.connection_sent_at:
-            response_status = "awaiting"
-        else:
+        awaiting_reply = getattr(lead, 'awaiting_reply', True)
+
+        # Determine response_status based on context
+        if not lead.connection_sent_at:
             response_status = "no_contact"
+        elif lead.status == "invitation_sent":
+            response_status = "awaiting_connection"
+        elif not awaiting_reply:
+            response_status = "needs_reply"  # They sent last, we need to reply
+        else:
+            response_status = "awaiting_reply"  # We sent last, waiting for them
+
+        # Next action from enrollment or last_message_at
+        enrollment = enrollments_map.get(lead.id)
+        next_action = None
+        now = datetime.utcnow()
+        if enrollment:
+            if enrollment.next_step_due_at:
+                diff = enrollment.next_step_due_at - now
+                hours_left = diff.total_seconds() / 3600
+                if hours_left > 24:
+                    days = int(hours_left / 24)
+                    next_action = f"Follow-up in {days}d"
+                elif hours_left > 1:
+                    next_action = f"Follow-up in {int(hours_left)}h"
+                elif hours_left > 0:
+                    next_action = "Follow-up soon"
+                else:
+                    next_action = "Follow-up pending"
+            elif enrollment.status == "paused":
+                next_action = "Draft pending"
+
+        # For leads awaiting reply without active enrollment timer,
+        # show time since last message as context
+        if not next_action and response_status == "awaiting_reply" and lead.last_message_at:
+            days_waiting = (now - lead.last_message_at).days
+            if days_waiting == 0:
+                next_action = "Sent today"
+            elif days_waiting == 1:
+                next_action = "Waiting 1 day"
+            else:
+                next_action = f"Waiting {days_waiting} days"
 
         pipeline[status].append({
             "id": lead.id,
@@ -104,6 +154,7 @@ def get_pipeline_leads(
             "has_conversation": has_conversation,
             "linkedin_chat_id": lead.linkedin_chat_id,
             "response_status": response_status,
+            "next_action": next_action,
             "sentiment_level": lead.sentiment_level if hasattr(lead, 'sentiment_level') else None,
             "last_activity": (
                 lead.last_message_at or lead.connected_at or lead.connection_sent_at or lead.updated_at

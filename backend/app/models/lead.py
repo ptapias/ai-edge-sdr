@@ -105,6 +105,7 @@ class Lead(Base):
     connected_at = Column(DateTime, nullable=True)
     last_message_at = Column(DateTime, nullable=True)
     linkedin_chat_id = Column(String(100), nullable=True)  # Unipile chat ID
+    awaiting_reply = Column(Boolean, default=True, server_default='true')  # True = we sent last, waiting for them
 
     # Invitation retry tracking (prevents infinite retry loops)
     invitation_attempts = Column(Integer, default=0, nullable=True)         # Total attempt count

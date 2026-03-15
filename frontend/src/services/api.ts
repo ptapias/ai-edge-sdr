@@ -612,8 +612,8 @@ export interface TemperatureDistribution {
 export interface ResponseTracking {
   contacted: number
   connected: number
-  in_conversation: number
-  response_rate: number
+  active_conversations: number
+  acceptance_rate: number
   conversation_rate: number
   avg_days_to_connect: number | null
 }
@@ -623,7 +623,6 @@ export interface ActivityTimeline {
   timeline: Array<{
     date: string
     invitations: number
-    successful_invitations: number
     connections: number
   }>
 }
@@ -637,7 +636,7 @@ export interface CampaignAnalytics {
     score_breakdown: Record<string, number>
     contacted: number
     responded: number
-    response_rate: number
+    acceptance_rate: number
     created_at: string | null
   }>
 }
@@ -732,7 +731,8 @@ export interface PipelineLead {
   score_label: string | null
   has_conversation: boolean
   linkedin_chat_id: string | null
-  response_status: 'responded' | 'awaiting' | 'no_contact'
+  response_status: 'awaiting_reply' | 'needs_reply' | 'awaiting_connection' | 'no_contact'
+  next_action: string | null
   sentiment_level: string | null
   last_activity: string | null
   updated_at: string | null
@@ -831,6 +831,11 @@ export interface SequenceEnrollment {
   total_messages_sent: number | null
   nurture_count: number | null
   lead_sentiment_level: string | null
+  lead_signal_strength: string | null
+  has_pending_draft: boolean
+  pending_draft_id: string | null
+  pending_draft_message: string | null
+  pending_draft_phase: string | null
 }
 
 export interface SequenceStats {
@@ -844,12 +849,20 @@ export interface SequenceStats {
   paused: number
   parked: number
   withdrawn: number
+  invitations_sent: number
+  connected: number
+  acceptance_rate: number
   reply_rate: number
   completion_rate: number
   sequence_mode?: string
   steps_breakdown: Array<{
     step_order: number
     step_type: string
+    label: string
+    sent: number
+    pending: number
+    failed: number
+    connected?: number
     reached: number
     completed: number
   }>
@@ -971,3 +984,136 @@ export const getSequenceStats = async (sequenceId: string): Promise<SequenceStat
 }
 
 export default api
+
+// === AutoOutreach Experiments ===
+
+export interface Experiment {
+  id: string
+  experiment_number: number
+  experiment_name: string
+  hypothesis: string | null
+  change_description: string | null
+  prompt_template: string
+  status: string
+  batch_size: number
+  connections_sent: number
+  connections_accepted: number
+  responses_received: number
+  acceptance_rate: number | null
+  response_rate: number | null
+  baseline_acceptance_rate: number | null
+  baseline_response_rate: number | null
+  improvement_acceptance: number | null
+  improvement_response: number | null
+  decision: string
+  started_at: string | null
+  evaluated_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ExperimentLead {
+  id: string
+  lead_id: string
+  message_sent: string | null
+  sent_at: string | null
+  accepted: boolean | null
+  accepted_at: string | null
+  responded: boolean | null
+  responded_at: string | null
+  lead_name: string | null
+  lead_company: string | null
+  lead_job_title: string | null
+}
+
+export interface ExperimentDetail extends Experiment {
+  leads: ExperimentLead[]
+}
+
+export interface ExperimentDashboard {
+  total_experiments: number
+  kept_count: number
+  discarded_count: number
+  running_count: number
+  current_baseline_rate: number | null
+  best_ever_rate: number | null
+  total_improvement: number | null
+  experiments: Experiment[]
+}
+
+export interface ExperimentProposal {
+  proposed_name: string
+  hypothesis: string
+  change_description: string
+  prompt_template: string
+  analysis: string
+}
+
+export interface ExperimentEvaluation {
+  experiment_id: string
+  connections_sent: number
+  connections_accepted: number
+  responses_received: number
+  acceptance_rate: number
+  response_rate: number
+  baseline_acceptance_rate: number | null
+  decision: string
+  improvement_acceptance: number | null
+  improvement_response: number | null
+}
+
+// Experiment API calls
+export const getExperimentDashboard = async (): Promise<ExperimentDashboard> => {
+  const response = await api.get('/experiments/dashboard')
+  return response.data
+}
+
+export const getExperiments = async (): Promise<Experiment[]> => {
+  const response = await api.get('/experiments/')
+  return response.data
+}
+
+export const getExperimentDetail = async (id: string): Promise<ExperimentDetail> => {
+  const response = await api.get(`/experiments/${id}`)
+  return response.data
+}
+
+export const createBaseline = async (): Promise<Experiment> => {
+  const response = await api.post('/experiments/baseline')
+  return response.data
+}
+
+export const createExperiment = async (data: {
+  experiment_name: string
+  hypothesis?: string
+  prompt_template?: string
+  batch_size?: number
+  is_baseline?: boolean
+}): Promise<Experiment> => {
+  const response = await api.post('/experiments/', data)
+  return response.data
+}
+
+export const startExperiment = async (id: string): Promise<Experiment> => {
+  const response = await api.post(`/experiments/${id}/start`)
+  return response.data
+}
+
+export const evaluateExperiment = async (id: string): Promise<ExperimentEvaluation> => {
+  const response = await api.post(`/experiments/${id}/evaluate`)
+  return response.data
+}
+
+export const proposeExperiment = async (): Promise<ExperimentProposal> => {
+  const response = await api.post('/experiments/propose')
+  return response.data
+}
+
+export const proposeAndCreateExperiment = async (): Promise<Experiment> => {
+  const response = await api.post('/experiments/propose-and-create')
+  return response.data
+}
+
+export const deleteExperiment = async (id: string): Promise<void> => {
+  await api.delete(`/experiments/${id}`)
+}

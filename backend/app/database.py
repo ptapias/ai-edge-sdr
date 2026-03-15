@@ -66,7 +66,21 @@ def run_migrations():
                 conn.execute(text(sql))
             except Exception as e:
                 logger.warning(f"Migration skipped: {e}")
-        conn.commit()
+        # Add reply_prompt to business_profiles
+        try:
+            conn.execute(text("ALTER TABLE business_profiles ADD COLUMN reply_prompt TEXT"))
+            conn.commit()
+            logger.info("Added reply_prompt column to business_profiles")
+        except Exception:
+            conn.rollback()
+
+        try:
+            conn.execute(text("ALTER TABLE leads ADD COLUMN awaiting_reply BOOLEAN DEFAULT true"))
+            conn.commit()
+            logger.info("Added awaiting_reply column to leads")
+        except Exception:
+            conn.rollback()
+
     logger.info("Database migrations completed")
 
 

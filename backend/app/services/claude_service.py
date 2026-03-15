@@ -193,7 +193,8 @@ Business Context:
         self,
         lead_data: Dict[str, Any],
         sender_context: Optional[Dict[str, Any]] = None,
-        strategy: str = "hybrid"
+        strategy: str = "hybrid",
+        experiment_prompt: Optional[str] = None
     ) -> str:
         """
         Generate a personalized LinkedIn connection message.
@@ -256,6 +257,12 @@ RULES:
 
 TONE: Professional peer reaching out to another professional. Think "I run X, you run Y, let's connect" — not "buy my product."
 
+CRITICAL: NEVER invent information about the sender. Use ONLY the name, role, company and context provided. If role says "Fundador", never say "CEO" or "Director". If a field is empty, skip it.
+
+- LANGUAGE DETECTION: Look at the lead's headline, job title, and company name. If they are in Spanish, write the ENTIRE message in Spanish (Spain, tuteo). If they are in ANY other language (English, French, Portuguese, German, etc.), write the ENTIRE message in English. This is critical — match the lead's profile language.
+- NEVER use forward slashes (/) to separate words or concepts (e.g. "marketing/ventas" is wrong, write "marketing y ventas").
+- NEVER use dashes or double dashes (-, --) as separators or bullet points in the message. These patterns look very AI-generated.
+
 Output ONLY the message, nothing else."""
         elif effective_strategy == "warm":
             # Senior/directors: warm intro referencing shared AI/tech interest + who you are
@@ -271,6 +278,12 @@ RULES:
 - NO flattery, NO superlatives, NO buzzwords
 
 TONE: Warm and genuine. You're a fellow professional in the AI space who noticed their work.
+
+CRITICAL: NEVER invent information about the sender. Use ONLY the name, role, company and context provided. If role says "Fundador", never say "CEO" or "Director". If a field is empty, skip it.
+
+- LANGUAGE DETECTION: Look at the lead's headline, job title, and company name. If they are in Spanish, write the ENTIRE message in Spanish (Spain, tuteo). If they are in ANY other language (English, French, Portuguese, German, etc.), write the ENTIRE message in English. This is critical — match the lead's profile language.
+- NEVER use forward slashes (/) to separate words or concepts (e.g. "marketing/ventas" is wrong, write "marketing y ventas").
+- NEVER use dashes or double dashes (-, --) as separators or bullet points in the message. These patterns look very AI-generated.
 
 Output ONLY the message, nothing else."""
         else:
@@ -299,6 +312,12 @@ BAD phrases (never use):
 - "Excited to connect"
 - "collaboration" or "opportunity"
 
+CRITICAL: NEVER invent information about the sender. Use ONLY the name, role, company and context provided. If role says "Fundador", never say "CEO" or "Director". If a field is empty, skip it.
+
+- LANGUAGE DETECTION: Look at the lead's headline, job title, and company name. If they are in Spanish, write the ENTIRE message in Spanish (Spain, tuteo). If they are in ANY other language (English, French, Portuguese, German, etc.), write the ENTIRE message in English. This is critical — match the lead's profile language.
+- NEVER use forward slashes (/) to separate words or concepts (e.g. "marketing/ventas" is wrong, write "marketing y ventas").
+- NEVER use dashes or double dashes (-, --) as separators or bullet points in the message. These patterns look very AI-generated.
+
 Output ONLY the message, nothing else."""
 
         user_content = f"""Write a connection message for:
@@ -314,10 +333,13 @@ Contact:
 
 Sender Context:
 - Name: {context.get('sender_name', 'Pablo')}
-- Role: {context.get('sender_role', 'Founder')}
-- Company: {context.get('sender_company', 'AI Edge Newsletter')}
-- Context: {context.get('sender_context', 'AI newsletter with 30K+ subscribers')}"""
+- Role: {context.get('sender_role', '')}
+- Company: {context.get('sender_company', '')}
+- Context: {context.get('sender_context', '')}"""
 
+        # AutoOutreach: override system_prompt if experiment template provided
+        if experiment_prompt:
+            system_prompt = experiment_prompt
         message = self.client.messages.create(
             model=self.model,
             max_tokens=150,
@@ -413,46 +435,47 @@ Sender:
                 "body": response_text[:500]
             }
 
+    DEFAULT_REPLY_PROMPT = """You are an AI assistant helping respond to LinkedIn conversations naturally.
+
+CONTEXT:
+- You are helping the sender respond to LinkedIn messages
+- Goal: Build genuine professional relationships through real curiosity
+- Tone: Direct, curious, warm but professional. Like a smart friend, not a salesperson.
+
+CRITICAL RULES:
+- Keep replies SHORT (2-4 sentences max)
+- RESPOND TO WHAT THEY ACTUALLY SAID - acknowledge their specific words
+- Ask thoughtful follow-up questions about THEIR world, not yours
+- Show genuine interest in their work, their challenges, their perspective
+- NEVER sell, pitch, or mention your product/service unless THEY bring it up first
+- NO flattery or fake enthusiasm
+- Avoid cliches like "excited to", "love that", "that's amazing"
+- NEVER invent information about the sender - only use what is provided
+
+STRATEGY:
+- Phase 1 (first 2-3 messages): Pure curiosity. Learn about them. Zero selling.
+- Phase 2 (if they share pain points): Empathize, ask deeper questions. Still no selling.
+- Phase 3 (only if they explicitly ask or show clear interest): Then and only then, share how you might help.
+
+If they asked a question, answer it directly and briefly.
+If they shared something, acknowledge it genuinely and dig deeper.
+If the conversation is stalling, ask a specific question about their market or daily challenges.
+
+Output ONLY the reply message, nothing else."""
+
     def generate_conversation_reply(
         self,
         conversation_history: str,
         contact_info: Dict[str, Any],
-        sender_context: Optional[Dict[str, Any]] = None
+        sender_context: Optional[Dict[str, Any]] = None,
+        custom_prompt: Optional[str] = None
     ) -> str:
         """
         Generate a contextual reply for an ongoing LinkedIn conversation.
-
-        Args:
-            conversation_history: Formatted conversation history
-            contact_info: Information about the contact (name, job_title, company)
-            sender_context: Sender's business context
-
-        Returns:
-            Reply message
         """
         context = sender_context or {}
 
-        system_prompt = """You are Pablo's AI assistant for LinkedIn conversations. You help continue conversations naturally.
-
-CONTEXT:
-- You're helping Pablo (the sender) respond to LinkedIn messages
-- Goal: Build genuine professional relationships, explore potential collaboration
-- Tone: Direct, curious, professional but not corporate
-
-RULES:
-- Keep replies SHORT (2-4 sentences max)
-- Reference what they said specifically
-- Ask thoughtful follow-up questions when appropriate
-- Show genuine interest in their work
-- NO flattery or fake enthusiasm
-- NO sales pitch unless they're clearly interested
-- Avoid clichés like "excited to" or "love that"
-
-If they asked a question, answer it directly.
-If they shared something, acknowledge it genuinely and dig deeper if interesting.
-If the conversation is stalling, ask a specific question about their work.
-
-Output ONLY the reply message, nothing else."""
+        system_prompt = custom_prompt or self.DEFAULT_REPLY_PROMPT
 
         user_content = f"""Generate a reply for this conversation:
 
@@ -465,7 +488,7 @@ CONTACT INFO:
 - Company: {contact_info.get('company', 'Unknown')}
 
 SENDER (Pablo) CONTEXT:
-- Role: {context.get('sender_role', 'Founder')}
+- Role: {context.get('sender_role', '')}
 - Company: {context.get('sender_company', '')}
 - Context: {context.get('sender_context', '')}
 
@@ -482,6 +505,114 @@ Write the reply:"""
 
         # Clean up any markdown formatting
         result = result.replace("```", "").replace("`", "").strip()
+
+        return result
+
+
+    def generate_smart_pipeline_message(
+        self,
+        lead_data: Dict[str, Any],
+        sender_context: Dict[str, Any],
+        conversation_history: str,
+        current_phase: str,
+        rejection_context: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a message for Smart Pipeline based on current phase and conversation.
+        """
+        phase_guidelines = {
+            "apertura": """PHASE: APERTURA (Opening)
+- Goal: Start a genuine conversation. NO selling whatsoever.
+- Ask about THEIR world: their market, their daily challenges, what they're seeing
+- Reference something specific from their profile or their company
+- Be curious, warm, brief (2-3 sentences max)
+- Example tone: "I noticed you're in [market] — how's the [specific aspect] looking right now?"
+""",
+            "calificacion": """PHASE: CALIFICACION (Qualification)
+- Goal: Discover pain points naturally. Still NO selling.
+- Dig deeper into what they shared. Ask about specific challenges.
+- Listen for signals: missed opportunities, time wasted, scaling issues
+- Keep it conversational, not like an interview (2-3 sentences)
+- Example: "That's interesting — when you mention [pain], how are you handling that currently?"
+""",
+            "valor": """PHASE: VALOR (Value)
+- Goal: Connect their pain to a potential solution. Soft introduction only.
+- Only if they've revealed a real pain point in previous messages
+- Share a relevant insight or how others solve similar problems
+- Suggest a brief call to explore, no pressure (2-3 sentences)
+- Example: "Some agencies I know solved [their pain] by [approach]. Would a 15-min call make sense to explore if something similar could work for you?"
+""",
+            "nurture": """PHASE: NURTURE
+- Goal: Stay on their radar without being annoying. Light value-add.
+- Share something genuinely useful: an article, a market insight, a trend
+- Very brief, no ask (1-2 sentences)
+- Space these out: only send every 6-8 weeks
+- Example: "Saw this [insight] and thought of your situation with [their context]. Hope things are going well."
+""",
+            "reactivacion": """PHASE: REACTIVACION (Reactivation)
+- Goal: Last attempt after long silence (30+ days)
+- Acknowledge the silence, give an easy out
+- One final value proposition, very soft (2-3 sentences)
+- Example: "Hey [name], I know it's been a while. Just wanted to check in — if [topic] isn't relevant anymore, no worries at all."
+""",
+        }
+
+        phase_guide = phase_guidelines.get(current_phase, phase_guidelines["apertura"])
+
+        system_prompt = f"""You are an AI assistant helping craft LinkedIn messages for a smart outreach pipeline.
+
+{phase_guide}
+
+CRITICAL RULES:
+- LANGUAGE: Look at the lead's headline, job title, and company. If in Spanish, write in Spanish (Spain, tuteo: tu/te, not usted). If in ANY other language, write in English.
+- Keep messages SHORT: 2-4 sentences max, under 600 characters.
+- RESPOND TO what they said in the conversation — do not ignore their words.
+- NEVER invent information about the sender. Only use what is provided.
+- NEVER use emojis excessively (max 0-1 per message).
+- Sound like a real person, not a bot. No corporate speak.
+- If the phase says "no selling", absolutely do NOT mention products/services.
+
+- NEVER use forward slashes (/) to separate words or concepts (e.g. "marketing/ventas" is wrong, write "marketing y ventas").
+- NEVER use dashes or double dashes (-, --) as separators or bullet points in the message. These patterns look very AI-generated.
+
+Output ONLY the message text, nothing else."""
+
+        rejection_note = ""
+        if rejection_context:
+            rejection_note = "\n\nNOTE: " + rejection_context + ". Generate a DIFFERENT message that avoids the same issues."
+
+        user_content = f"""Generate a LinkedIn message for this lead:
+
+LEAD:
+- Name: {lead_data.get('first_name', '')} {lead_data.get('last_name', '')}
+- Title: {lead_data.get('job_title', '')}
+- Company: {lead_data.get('company_name', '')}
+- Industry: {lead_data.get('company_industry', '')}
+- City: {lead_data.get('city', '')}
+
+SENDER:
+- Name: {sender_context.get('sender_name', '')}
+- Role: {sender_context.get('sender_role', '')}
+- Company: {sender_context.get('sender_company', '')}
+- Context: {sender_context.get('sender_context', '')}
+
+CONVERSATION SO FAR:
+{conversation_history or '(No previous messages — this is the first follow-up after connecting)'}
+{rejection_note}
+
+Write the message:"""
+
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=400,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}]
+        )
+
+        result = message.content[0].text.strip()
+        result = result.replace("```", "").replace("`", "").strip()
+        if result.startswith('"') and result.endswith('"'):
+            result = result[1:-1]
 
         return result
 
@@ -781,6 +912,10 @@ RULES:
 {f'STEP GUIDANCE: {step_context}' if step_context else ''}
 
 {f'CONVERSATION SO FAR:{chr(10)}{conversation_history}' if conversation_history else ''}
+
+- LANGUAGE DETECTION: Look at the lead's headline, job title, and company name. If they are in Spanish, write the ENTIRE message in Spanish (Spain, tuteo). If they are in ANY other language (English, French, Portuguese, German, etc.), write the ENTIRE message in English. This is critical — match the lead's profile language.
+- NEVER use forward slashes (/) to separate words or concepts (e.g. "marketing/ventas" is wrong, write "marketing y ventas").
+- NEVER use dashes or double dashes (-, --) as separators or bullet points in the message. These patterns look very AI-generated.
 
 Output ONLY the message text, nothing else. No quotes, no labels."""
 

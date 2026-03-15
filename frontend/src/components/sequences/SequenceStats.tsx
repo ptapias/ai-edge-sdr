@@ -10,6 +10,9 @@ import {
   MessageSquare,
   Target,
   Sparkles,
+  Link2,
+  XCircle,
+  UserCheck,
 } from 'lucide-react'
 import { getSequenceStats } from '../../services/api'
 
@@ -57,34 +60,57 @@ export default function SequenceStats({ sequenceId }: SequenceStatsProps) {
 
   return (
     <div className="space-y-6">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* Summary Cards - 2 rows */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <StatCard
-          label="Total Enrolled"
+          label="Enrolled"
           value={stats.total_enrolled}
           icon={Users}
           color="blue"
         />
         <StatCard
-          label="Active"
+          label="Invitations Sent"
+          value={stats.invitations_sent}
+          icon={Send}
+          color="indigo"
+          subtext={`${stats.total_enrolled - stats.invitations_sent - stats.failed} pending`}
+        />
+        <StatCard
+          label="Connected"
+          value={stats.connected}
+          icon={UserCheck}
+          color="green"
+          subtext={stats.invitations_sent > 0 ? `${stats.acceptance_rate}% acceptance` : undefined}
+        />
+        <StatCard
+          label="In Progress"
           value={stats.active}
           icon={TrendingUp}
-          color="green"
+          color="cyan"
+          subtext={stats.paused > 0 ? `${stats.paused} paused` : undefined}
         />
         <StatCard
-          label={isPipeline ? "Meetings" : "Replied"}
-          value={isPipeline ? (stats.phase_breakdown?.meeting || 0) : stats.replied}
-          icon={isPipeline ? Target : MessageCircle}
+          label="Replied"
+          value={stats.replied}
+          icon={MessageCircle}
           color="orange"
-          subtext={stats.total_enrolled > 0 ? `${stats.reply_rate.toFixed(1)}% rate` : undefined}
+          subtext={stats.total_enrolled > 0 ? `${stats.reply_rate}% rate` : undefined}
         />
-        <StatCard
-          label={isPipeline ? "Parked" : "Completed"}
-          value={isPipeline ? (stats.parked || 0) : stats.completed}
-          icon={CheckCircle2}
-          color="emerald"
-          subtext={isPipeline ? undefined : (stats.total_enrolled > 0 ? `${stats.completion_rate.toFixed(1)}% rate` : undefined)}
-        />
+        {stats.failed > 0 ? (
+          <StatCard
+            label="Failed"
+            value={stats.failed}
+            icon={XCircle}
+            color="red"
+          />
+        ) : (
+          <StatCard
+            label={isPipeline ? "Meetings" : "Completed"}
+            value={isPipeline ? (stats.phase_breakdown?.meeting || 0) : stats.completed}
+            icon={isPipeline ? Target : CheckCircle2}
+            color="emerald"
+          />
+        )}
       </div>
 
       {/* Phase Funnel (Pipeline mode) */}
@@ -102,7 +128,7 @@ export default function SequenceStats({ sequenceId }: SequenceStatsProps) {
                 <FunnelBar
                   key={phase}
                   label={config.label}
-                  count={count}
+                  count={count as number}
                   total={stats.total_enrolled}
                   color={config.color}
                 />
@@ -112,93 +138,150 @@ export default function SequenceStats({ sequenceId }: SequenceStatsProps) {
         </div>
       )}
 
-      {/* Classic Conversion Funnel */}
-      {!isPipeline && stats.total_enrolled > 0 && (
+      {/* Step-by-step Progress (classic mode) */}
+      {!isPipeline && stats.steps_breakdown && stats.steps_breakdown.length > 0 && (
         <div className="border rounded-lg p-4">
-          <h4 className="text-sm font-semibold text-gray-900 mb-4">Conversion Funnel</h4>
-          <div className="space-y-3">
-            <FunnelBar
-              label="Enrolled"
-              count={stats.total_enrolled}
-              total={stats.total_enrolled}
-              color="bg-blue-500"
-            />
-            <FunnelBar
-              label="Active / In Progress"
-              count={stats.active}
-              total={stats.total_enrolled}
-              color="bg-indigo-500"
-            />
-            <FunnelBar
-              label="Completed All Steps"
-              count={stats.completed}
-              total={stats.total_enrolled}
-              color="bg-green-500"
-            />
-            <FunnelBar
-              label="Replied (Conversions)"
-              count={stats.replied}
-              total={stats.total_enrolled}
-              color="bg-orange-500"
-            />
-            {stats.failed > 0 && (
-              <FunnelBar
-                label="Failed"
-                count={stats.failed}
-                total={stats.total_enrolled}
-                color="bg-red-400"
-              />
-            )}
-            {stats.withdrawn > 0 && (
-              <FunnelBar
-                label="Withdrawn"
-                count={stats.withdrawn}
-                total={stats.total_enrolled}
-                color="bg-gray-400"
-              />
-            )}
+          <h4 className="text-sm font-semibold text-gray-900 mb-4">Step Progress</h4>
+          <div className="space-y-4">
+            {stats.steps_breakdown.map((step: any) => {
+              const isConnection = step.step_type === 'connection_request'
+
+              return (
+                <div key={step.step_order} className="border rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
+                      isConnection ? 'bg-blue-100' : 'bg-purple-100'
+                    }`}>
+                      {isConnection
+                        ? <Link2 className="w-3.5 h-3.5 text-blue-600" />
+                        : <MessageSquare className="w-3.5 h-3.5 text-purple-600" />
+                      }
+                    </div>
+                    <span className="text-sm font-medium text-gray-900">
+                      Step {step.step_order}: {step.label}
+                    </span>
+                  </div>
+
+                  {isConnection ? (
+                    <>
+                      {/* Connection request step detail */}
+                      <div className="grid grid-cols-4 gap-2 text-center">
+                        <MiniStat
+                          label="Sent"
+                          value={step.sent}
+                          total={stats.total_enrolled}
+                          color="text-blue-600"
+                        />
+                        <MiniStat
+                          label="Accepted"
+                          value={step.connected}
+                          total={step.sent}
+                          color="text-green-600"
+                        />
+                        <MiniStat
+                          label="Pending"
+                          value={step.pending}
+                          color="text-gray-500"
+                        />
+                        <MiniStat
+                          label="Failed"
+                          value={step.failed}
+                          color="text-red-500"
+                        />
+                      </div>
+                      {/* Progress bar */}
+                      <div className="mt-3 flex h-2.5 rounded-full overflow-hidden bg-gray-100">
+                        {step.connected > 0 && (
+                          <div
+                            className="bg-green-500"
+                            style={{ width: `${(step.connected / stats.total_enrolled) * 100}%` }}
+                            title={`${step.connected} accepted`}
+                          />
+                        )}
+                        {(step.sent - step.connected) > 0 && (
+                          <div
+                            className="bg-blue-400"
+                            style={{ width: `${((step.sent - step.connected) / stats.total_enrolled) * 100}%` }}
+                            title={`${step.sent - step.connected} awaiting acceptance`}
+                          />
+                        )}
+                        {step.pending > 0 && (
+                          <div
+                            className="bg-gray-300"
+                            style={{ width: `${(step.pending / stats.total_enrolled) * 100}%` }}
+                            title={`${step.pending} not yet sent`}
+                          />
+                        )}
+                        {step.failed > 0 && (
+                          <div
+                            className="bg-red-400"
+                            style={{ width: `${(step.failed / stats.total_enrolled) * 100}%` }}
+                            title={`${step.failed} failed`}
+                          />
+                        )}
+                      </div>
+                      <div className="mt-1.5 flex gap-3 text-[10px] text-gray-400">
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" />Accepted</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400" />Awaiting</span>
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-300" />Not sent</span>
+                        {step.failed > 0 && (
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400" />Failed</span>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Follow-up step detail */}
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <MiniStat
+                          label="Sent"
+                          value={step.sent}
+                          total={step.reached}
+                          color="text-purple-600"
+                        />
+                        <MiniStat
+                          label="Pending"
+                          value={step.pending}
+                          color="text-gray-500"
+                        />
+                        <MiniStat
+                          label="Eligible"
+                          value={step.reached}
+                          color="text-gray-700"
+                        />
+                      </div>
+                      <div className="mt-3 w-full bg-gray-100 rounded-full h-2.5">
+                        <div
+                          className="h-2.5 rounded-full bg-purple-500 transition-all"
+                          style={{ width: `${step.reached > 0 ? (step.sent / step.reached * 100) : 0}%` }}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
 
-      {/* Steps Breakdown (classic only) */}
-      {!isPipeline && stats.steps_breakdown && stats.steps_breakdown.length > 0 && (
+      {/* Outcomes summary */}
+      {stats.total_enrolled > 0 && (stats.replied > 0 || stats.completed > 0 || stats.failed > 0) && (
         <div className="border rounded-lg p-4">
-          <h4 className="text-sm font-semibold text-gray-900 mb-4">Steps Performance</h4>
-          <div className="space-y-3">
-            {stats.steps_breakdown.map((step) => {
-              const isConnection = step.step_type === 'connection_request'
-              const Icon = isConnection ? Send : MessageSquare
-              const completionRate = step.reached > 0 ? (step.completed / step.reached * 100) : 0
-
-              return (
-                <div key={step.step_order} className="flex items-center gap-3">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    isConnection ? 'bg-blue-100' : 'bg-purple-100'
-                  }`}>
-                    <Icon className={`w-4 h-4 ${isConnection ? 'text-blue-600' : 'text-purple-600'}`} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-gray-700">
-                        Step {step.step_order}: {isConnection ? 'Connection Request' : 'Follow-up'}
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        {step.completed}/{step.reached} ({completionRate.toFixed(0)}%)
-                      </span>
-                    </div>
-                    <div className="w-full bg-gray-100 rounded-full h-2">
-                      <div
-                        className={`h-2 rounded-full transition-all ${
-                          isConnection ? 'bg-blue-500' : 'bg-purple-500'
-                        }`}
-                        style={{ width: `${Math.min(completionRate, 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
+          <h4 className="text-sm font-semibold text-gray-900 mb-3">Outcomes</h4>
+          <div className="space-y-2">
+            {stats.replied > 0 && (
+              <FunnelBar label="Replied (exited flow)" count={stats.replied} total={stats.total_enrolled} color="bg-orange-500" />
+            )}
+            {stats.completed > 0 && (
+              <FunnelBar label="Completed all steps" count={stats.completed} total={stats.total_enrolled} color="bg-green-500" />
+            )}
+            {stats.failed > 0 && (
+              <FunnelBar label="Failed" count={stats.failed} total={stats.total_enrolled} color="bg-red-400" />
+            )}
+            {stats.withdrawn > 0 && (
+              <FunnelBar label="Withdrawn" count={stats.withdrawn} total={stats.total_enrolled} color="bg-gray-400" />
+            )}
           </div>
         </div>
       )}
@@ -232,9 +315,12 @@ function StatCard({
 }) {
   const colorMap: Record<string, { bg: string; text: string; icon: string }> = {
     blue: { bg: 'bg-blue-50', text: 'text-blue-700', icon: 'text-blue-500' },
+    indigo: { bg: 'bg-indigo-50', text: 'text-indigo-700', icon: 'text-indigo-500' },
     green: { bg: 'bg-green-50', text: 'text-green-700', icon: 'text-green-500' },
+    cyan: { bg: 'bg-cyan-50', text: 'text-cyan-700', icon: 'text-cyan-500' },
     orange: { bg: 'bg-orange-50', text: 'text-orange-700', icon: 'text-orange-500' },
     emerald: { bg: 'bg-emerald-50', text: 'text-emerald-700', icon: 'text-emerald-500' },
+    red: { bg: 'bg-red-50', text: 'text-red-700', icon: 'text-red-500' },
   }
   const c = colorMap[color] || colorMap.blue
 
@@ -246,6 +332,28 @@ function StatCard({
       </div>
       <p className={`text-2xl font-bold ${c.text}`}>{value}</p>
       {subtext && <p className="text-xs text-gray-500 mt-0.5">{subtext}</p>}
+    </div>
+  )
+}
+
+function MiniStat({
+  label,
+  value,
+  total,
+  color,
+}: {
+  label: string
+  value: number
+  total?: number
+  color: string
+}) {
+  return (
+    <div>
+      <p className={`text-lg font-bold ${color}`}>{value}</p>
+      <p className="text-[10px] text-gray-500 uppercase font-medium">{label}</p>
+      {total != null && total > 0 && (
+        <p className="text-[10px] text-gray-400">{(value / total * 100).toFixed(0)}%</p>
+      )}
     </div>
   )
 }

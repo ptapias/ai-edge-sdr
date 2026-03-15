@@ -300,11 +300,13 @@ async def scheduler_loop():
 
     tick_count = 0
     while _scheduler_running:
+        db = None
         try:
             # Create a new database session for each iteration
             db = SessionLocal()
+
+            # Phase 1: Process automatic invitations (existing behavior)
             try:
-                # Phase 1: Process automatic invitations (existing behavior)
                 result = await send_automatic_invitation(db)
                 if result.get("sent"):
                     logger.info(f"[Scheduler] Successfully sent invitation: {result}")
@@ -312,40 +314,51 @@ async def scheduler_loop():
                     "Automation disabled", "Outside working hours",
                     "No eligible leads", "No settings found"
                 ]:
-                    # Only log non-routine reasons (skip noise)
                     reason = result.get("reason", "")
                     if "Scheduler paused" in reason:
-                        # Log pause message less frequently (every 10 ticks)
                         if tick_count % 60 == 0:
                             logger.info(f"[Scheduler] {reason}")
                     else:
                         logger.debug(f"[Scheduler] Not sending: {reason}")
+            except Exception as e:
+                logger.error(f"[Scheduler] Error in send_automatic_invitation: {e}", exc_info=True)
 
-                # Phase 2: Process sequence actions (connection requests + follow-ups)
+            # Phase 2: Process sequence actions (connection requests + follow-ups)
+            try:
+                await process_sequence_actions(db)
+            except Exception as e:
+                logger.error(f"[Scheduler] Error in sequence actions: {e}", exc_info=True)
+
+            # Phase 3: Detect connection acceptances (every ~30 min)
+            if tick_count % 60 == 0:
                 try:
-                    await process_sequence_actions(db)
+                    logger.info(f"[Scheduler] Tick {tick_count}: running connection detection")
+                    await detect_connection_changes(db)
                 except Exception as e:
-                    logger.error(f"[Scheduler] Error in sequence actions: {e}")
+                    logger.error(f"[Scheduler] Error detecting connections: {e}", exc_info=True)
 
-                # Phase 3: Detect connection acceptances (every ~30 min)
-                if tick_count % 60 == 0:
-                    try:
-                        await detect_connection_changes(db)
-                    except Exception as e:
-                        logger.error(f"[Scheduler] Error detecting connections: {e}")
+            # Phase 4: Detect replies (every ~30 min, offset from Phase 3)
+            if tick_count % 60 == 30:
+                try:
+                    logger.info(f"[Scheduler] Tick {tick_count}: running reply detection")
+                    await detect_replies(db)
+                except Exception as e:
+                    logger.error(f"[Scheduler] Error detecting replies: {e}", exc_info=True)
 
-                # Phase 4: Detect replies (every ~30 min, offset from Phase 3)
-                if tick_count % 60 == 30:
-                    try:
-                        await detect_replies(db)
-                    except Exception as e:
-                        logger.error(f"[Scheduler] Error detecting replies: {e}")
+            # Log heartbeat every 20 ticks (~10 min)
+            if tick_count % 20 == 0:
+                logger.info(f"[Scheduler] Heartbeat: tick {tick_count}, scheduler alive")
 
-                tick_count += 1
-            finally:
-                db.close()
+            tick_count += 1
+
         except Exception as e:
-            logger.error(f"[Scheduler] Error in scheduler loop: {e}")
+            logger.error(f"[Scheduler] CRITICAL error in scheduler loop tick {tick_count}: {e}", exc_info=True)
+        finally:
+            if db:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
         # Wait 30 seconds before next check
         # Jitter: 25-35s to avoid fixed-interval patterns (LinkedIn best practice)

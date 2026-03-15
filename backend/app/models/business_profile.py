@@ -32,6 +32,9 @@ class BusinessProfile(Base):
     value_proposition = Column(Text, nullable=True)
     key_benefits = Column(Text, nullable=True)  # Comma-separated
 
+    # AI reply prompt for inbox conversations
+    reply_prompt = Column(Text, nullable=True)
+
     # Personalization context for AI messages
     sender_name = Column(String(100), nullable=True)
     sender_role = Column(String(255), nullable=True)

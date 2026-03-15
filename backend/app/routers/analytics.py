@@ -123,7 +123,7 @@ def get_response_tracking(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Response rate and tracking metrics."""
+    """Acceptance rate, active conversations, and tracking metrics."""
     contacted = db.query(Lead).filter(
         Lead.user_id == current_user.id,
         Lead.connection_sent_at.isnot(None)
@@ -134,14 +134,10 @@ def get_response_tracking(
         Lead.connected_at.isnot(None)
     ).count()
 
-    in_conversation = db.query(Lead).filter(
+    # Active conversations = leads that have a linkedin_chat_id (actual message exchange)
+    active_conversations = db.query(Lead).filter(
         Lead.user_id == current_user.id,
-        Lead.status.in_([
-            LeadStatus.IN_CONVERSATION.value,
-            LeadStatus.MEETING_SCHEDULED.value,
-            LeadStatus.QUALIFIED.value,
-            LeadStatus.CLOSED_WON.value,
-        ])
+        Lead.linkedin_chat_id.isnot(None)
     ).count()
 
     # Average time to connect (for leads that have both dates)
@@ -159,7 +155,6 @@ def get_response_tracking(
         .scalar()
     )
 
-    # For PostgreSQL, use EXTRACT(EPOCH FROM ...) instead
     avg_days = None
     if avg_time_query is not None:
         try:
@@ -170,9 +165,9 @@ def get_response_tracking(
     return {
         "contacted": contacted,
         "connected": connected,
-        "in_conversation": in_conversation,
-        "response_rate": round((connected / contacted * 100) if contacted > 0 else 0, 1),
-        "conversation_rate": round((in_conversation / connected * 100) if connected > 0 else 0, 1),
+        "active_conversations": active_conversations,
+        "acceptance_rate": round((connected / contacted * 100) if contacted > 0 else 0, 1),
+        "conversation_rate": round((active_conversations / connected * 100) if connected > 0 else 0, 1),
         "avg_days_to_connect": avg_days,
     }
 
@@ -183,21 +178,21 @@ def get_activity_timeline(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Daily activity over the specified period."""
+    """Daily activity over the specified period. Only counts successful invitations."""
     days_map = {"7d": 7, "14d": 14, "30d": 30, "90d": 90}
     days = days_map.get(period, 30)
     start_date = datetime.utcnow() - timedelta(days=days)
 
-    # Invitation logs by day
+    # Only count successful invitation logs
     invitation_data = (
         db.query(
             cast(InvitationLog.sent_at, Date).label("date"),
             func.count(InvitationLog.id).label("invitations"),
-            func.sum(case((InvitationLog.success == True, 1), else_=0)).label("successful"),
         )
         .filter(
             InvitationLog.user_id == current_user.id,
             InvitationLog.sent_at >= start_date,
+            InvitationLog.success == True,
         )
         .group_by(cast(InvitationLog.sent_at, Date))
         .all()
@@ -205,10 +200,7 @@ def get_activity_timeline(
 
     inv_by_date = {}
     for row in invitation_data:
-        inv_by_date[str(row.date)] = {
-            "invitations": row.invitations,
-            "successful": int(row.successful or 0),
-        }
+        inv_by_date[str(row.date)] = row.invitations
 
     # Connections by day
     connection_data = (
@@ -233,11 +225,9 @@ def get_activity_timeline(
     timeline = []
     for i in range(days):
         date = (datetime.utcnow() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
-        inv = inv_by_date.get(date, {})
         timeline.append({
             "date": date,
-            "invitations": inv.get("invitations", 0),
-            "successful_invitations": inv.get("successful", 0),
+            "invitations": inv_by_date.get(date, 0),
             "connections": conn_by_date.get(date, 0),
         })
 
@@ -267,7 +257,7 @@ def get_campaign_analytics(
         status_counts = {}
         score_counts = {"hot": 0, "warm": 0, "cold": 0, "unscored": 0}
         contacted = 0
-        responded = 0
+        accepted = 0
 
         for lead in leads:
             status_counts[lead.status] = status_counts.get(lead.status, 0) + 1
@@ -278,7 +268,7 @@ def get_campaign_analytics(
             if lead.connection_sent_at:
                 contacted += 1
             if lead.connected_at:
-                responded += 1
+                accepted += 1
 
         result.append({
             "id": campaign.id,
@@ -287,8 +277,8 @@ def get_campaign_analytics(
             "status_breakdown": status_counts,
             "score_breakdown": score_counts,
             "contacted": contacted,
-            "responded": responded,
-            "response_rate": round((responded / contacted * 100) if contacted > 0 else 0, 1),
+            "accepted": accepted,
+            "acceptance_rate": round((accepted / contacted * 100) if contacted > 0 else 0, 1),
             "created_at": campaign.created_at.isoformat() if campaign.created_at else None,
         })
 

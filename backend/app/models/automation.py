@@ -153,7 +153,7 @@ class InvitationLog(Base):
     lead_id = Column(String(36), nullable=False)
     lead_name = Column(String(200), nullable=True)
     lead_company = Column(String(200), nullable=True)
-    lead_job_title = Column(String(200), nullable=True)
+    lead_job_title = Column(String(500), nullable=True)
     lead_linkedin_url = Column(String(500), nullable=True)
     message_preview = Column(String(300), nullable=True)  # First 300 chars of message
     campaign_id = Column(String(36), nullable=True)
