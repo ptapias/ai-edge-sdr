@@ -242,20 +242,20 @@ Business Context:
                 effective_strategy = "gradual"
 
         if effective_strategy == "direct":
-            # C-level: mention who you are and the newsletter, but DON'T pitch sponsorship
-            system_prompt = """You are writing a LinkedIn connection request on behalf of the sender. The goal is to open a door with a senior decision-maker — NOT to sell in the first message.
+            # C-level: brief professional intro, zero pitch
+            system_prompt = """You are writing a LinkedIn connection request on behalf of the sender. The goal is to establish a genuine professional connection.
 
 RULES:
 - MAXIMUM 300 characters (hard limit)
-- Briefly mention you run an AI-focused newsletter (AI Edge) with 30K+ subscribers
-- Reference their specific role/company and why connecting makes sense
-- Frame it as a peer-to-peer connection, NOT a sales pitch
-- DO NOT mention sponsorships, pricing, packages, or selling anything
+- Introduce yourself briefly (name and role only)
+- Reference something specific about THEIR company or role that genuinely caught your attention
+- Give ONE clear reason why connecting makes sense professionally
+- DO NOT mention AI, tech, newsletters, automation, sponsorships, or any product/service
+- DO NOT ask about their business challenges or how they use technology
 - DO NOT ask for a meeting or call
-- Be direct and concise — one clear reason to connect
 - NO flattery, NO superlatives, NO buzzwords
 
-TONE: Professional peer reaching out to another professional. Think "I run X, you run Y, let's connect" — not "buy my product."
+TONE: One professional reaching out to another. Short, genuine, human. Like someone you met at a conference saying "Hey, I saw you run X, I do something similar, let's stay in touch."
 
 CRITICAL: NEVER invent information about the sender. Use ONLY the name, role, company and context provided. If role says "Fundador", never say "CEO" or "Director". If a field is empty, skip it.
 
@@ -265,19 +265,19 @@ CRITICAL: NEVER invent information about the sender. Use ONLY the name, role, co
 
 Output ONLY the message, nothing else."""
         elif effective_strategy == "warm":
-            # Senior/directors: warm intro referencing shared AI/tech interest + who you are
-            system_prompt = """You are writing a LinkedIn connection request on behalf of the sender. The goal is to build rapport with someone in a senior role by showing genuine interest in their work while briefly mentioning your own context.
+            # Senior/directors: warm genuine intro, no business pitch
+            system_prompt = """You are writing a LinkedIn connection request on behalf of the sender. The goal is to establish a genuine professional connection with someone in a senior role.
 
 RULES:
 - MAXIMUM 300 characters (hard limit)
-- Reference their specific work, role, or company
-- Briefly mention you're in the AI/tech space (you can mention your newsletter if natural)
-- Show genuine interest in what they're doing
-- DO NOT mention sponsorships, pricing, packages, or selling anything
+- Reference something specific about their work, company, or role
+- Show genuine curiosity about what they do (their industry, their company, their projects)
+- DO NOT mention AI, tech, newsletters, automation, or any product/service
+- DO NOT ask about their business challenges or how they use technology
 - DO NOT ask for a meeting or call
 - NO flattery, NO superlatives, NO buzzwords
 
-TONE: Warm and genuine. You're a fellow professional in the AI space who noticed their work.
+TONE: Warm and genuine. Like a professional who genuinely found their work interesting. Think "Hey, I saw your company does X, that's really interesting" not "I work in AI and want to know how you use it."
 
 CRITICAL: NEVER invent information about the sender. Use ONLY the name, role, company and context provided. If role says "Fundador", never say "CEO" or "Director". If a field is empty, skip it.
 
@@ -288,29 +288,28 @@ CRITICAL: NEVER invent information about the sender. Use ONLY the name, role, co
 Output ONLY the message, nothing else."""
         else:
             # Gradual: pure rapport, no mention of newsletter or business
-            system_prompt = """You are a LinkedIn connection request writer. Write brief, honest messages that show genuine curiosity about the person's work in AI/tech.
+            system_prompt = """You are writing a LinkedIn connection request. Write a brief, genuine message to connect with this person professionally.
 
 RULES:
 - MAXIMUM 300 characters (hard limit)
-- Connect based on shared interest in AI/tech
-- Reference their specific work, role, or company
-- Show genuine curiosity about what they're building
-- DO NOT mention newsletters, sponsorships, or selling anything
+- Reference something specific about their work, role, company, or industry
+- Show genuine interest in what they do as a professional
+- DO NOT mention AI, tech, newsletters, automation, or any product/service
+- DO NOT ask about their business challenges or how they use technology
 - NO flattery or ass-kissing
 - NO superlatives or excessive praise
 
-GOOD phrases:
-- "Curious about how you're using AI at..."
-- "Noticed you're building..."
-- "Interested in your approach to..."
-- "Your work on [specific thing] caught my eye"
+GOOD examples:
+- "Hola X, vi que diriges Y en Z. Me parece un proyecto muy interesante, me encantaria conectar."
+- "Hi X, noticed you work in [their industry] at [company]. Would love to connect."
+- "X, your background in [their field] caught my attention. Let's connect!"
 
-BAD phrases (never use):
-- "Impressed by your work"
-- "Amazing profile"
-- "Love your content"
-- "Excited to connect"
-- "collaboration" or "opportunity"
+BAD examples (NEVER do this):
+- "Curious about how you're using AI at..." (this is selling)
+- "Are you seeing AI tools impact..." (this is selling)
+- "Interested in your approach to tech/automation..." (this is selling)
+- "Impressed by your work" (flattery)
+- "collaboration" or "opportunity" (sales language)
 
 CRITICAL: NEVER invent information about the sender. Use ONLY the name, role, company and context provided. If role says "Fundador", never say "CEO" or "Director". If a field is empty, skip it.
 
