@@ -153,9 +153,12 @@ async def send_automatic_invitation(db: Session) -> dict:
     if not settings:
         return {"sent": False, "reason": "No settings found"}
 
-    # Reset daily counter if it's a new day
-    today = datetime.utcnow().date()
-    if settings.last_reset_date is None or settings.last_reset_date.date() < today:
+    # Reset daily counter if it's a new day (using configured timezone)
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(settings.timezone or "Europe/Madrid")
+    today = datetime.now(tz).date()
+    last_reset_local = settings.last_reset_date.astimezone(tz).date() if settings.last_reset_date and settings.last_reset_date.tzinfo else (settings.last_reset_date.date() if settings.last_reset_date else None)
+    if last_reset_local is None or last_reset_local < today:
         settings.invitations_sent_today = 0
         settings.last_reset_date = datetime.utcnow()
         # Also auto-clear daily pause if it expired
@@ -192,7 +195,6 @@ async def send_automatic_invitation(db: Session) -> dict:
     query = db.query(Lead).filter(
         Lead.status.in_(target_statuses),
         Lead.linkedin_url.isnot(None),
-        Lead.linkedin_message.isnot(None),
         # Exclude leads currently in backoff cooldown
         or_(
             Lead.invitation_next_retry_at.is_(None),
@@ -221,6 +223,53 @@ async def send_automatic_invitation(db: Session) -> dict:
 
     if not lead:
         return {"sent": False, "reason": "No eligible leads"}
+
+    # Auto-generate message if missing
+    if not lead.linkedin_message:
+        try:
+            from .claude_service import ClaudeService
+            from ..models.business_profile import BusinessProfile
+            from .experiment_service import ExperimentService
+
+            profile = db.query(BusinessProfile).filter(
+                BusinessProfile.user_id == settings.user_id,
+                BusinessProfile.is_default == True
+            ).first()
+            if profile:
+                claude = ClaudeService()
+                sender_context = {
+                    "sender_name": profile.sender_name,
+                    "sender_role": profile.sender_role,
+                    "sender_company": profile.sender_company,
+                    "sender_context": profile.sender_context,
+                }
+                lead_data = {
+                    "first_name": lead.first_name,
+                    "last_name": lead.last_name,
+                    "job_title": lead.job_title,
+                    "headline": lead.headline,
+                    "company_name": lead.company_name,
+                    "company_industry": lead.company_industry,
+                    "city": lead.city,
+                    "country": lead.country,
+                }
+                # Check for active experiment prompt
+                exp_service = ExperimentService()
+                experiment_prompt = None
+                active_exp = exp_service.get_active_experiment(db, settings.user_id)
+                if active_exp:
+                    experiment_prompt = active_exp.prompt_template
+
+                lead.linkedin_message = claude.generate_linkedin_message(
+                    lead_data, sender_context, "hybrid", experiment_prompt
+                )
+                db.commit()
+                logger.info(f"[Scheduler] Auto-generated message for {lead.display_name}")
+            else:
+                return {"sent": False, "reason": "No business profile for message generation"}
+        except Exception as e:
+            logger.error(f"[Scheduler] Failed to auto-generate message for {lead.display_name}: {e}")
+            return {"sent": False, "reason": f"Message generation failed: {e}"}
 
     # Send invitation via Unipile
     unipile = UnipileService()
