@@ -26,6 +26,7 @@ from ..models.sequence import (
 from .unipile_service import UnipileService
 from .claude_service import ClaudeService
 from .encryption_service import get_encryption_service
+from ..models.draft_message import DraftMessage, DraftStatus
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +304,12 @@ async def _handle_phase_transition(
 
     elif outcome == "nurture":
         _move_to_nurture(enrollment, now)
+        # Generate a response draft for the current reply before entering nurture
+        await _generate_and_send(
+            db, enrollment, lead, sequence,
+            "nurture", sender_context, lead_data,
+            conversation_history, analysis, unipile
+        )
 
     elif outcome == "meeting":
         enrollment.status = EnrollmentStatus.COMPLETED.value
@@ -370,19 +377,9 @@ async def _generate_and_send(
     phase_analysis: dict,
     unipile: UnipileService,
 ):
-    """Generate a phase-appropriate message and send it via Unipile."""
+    """Generate a phase-appropriate message and create a draft for user approval."""
     if not lead.linkedin_chat_id:
-        logger.warning(f"[Pipeline] Cannot send message to {lead.display_name}: no chat_id")
-        return
-
-    # Check working hours
-    settings = db.query(AutomationSettings).filter(
-        AutomationSettings.user_id == enrollment.user_id
-    ).first()
-    if settings and not settings.is_working_hour():
-        # Don't send outside working hours — schedule for next tick
-        logger.info(f"[Pipeline] Outside working hours, deferring message for {lead.display_name}")
-        enrollment.next_step_due_at = datetime.utcnow() + timedelta(minutes=30)
+        logger.warning(f"[Pipeline] Cannot generate draft for {lead.display_name}: no chat_id")
         return
 
     claude = ClaudeService()
@@ -395,31 +392,26 @@ async def _generate_and_send(
         messages_in_phase=enrollment.messages_in_phase or 0,
     )
 
-    # Send via Unipile
-    result = await unipile.send_message(lead.linkedin_chat_id, message)
+    # Create a draft for user approval instead of sending directly
+    draft = DraftMessage(
+        enrollment_id=str(enrollment.id),
+        lead_id=str(lead.id),
+        sequence_id=str(sequence.id),
+        user_id=str(enrollment.user_id),
+        pipeline_phase=phase,
+        generated_message=message,
+        status=DraftStatus.PENDING.value,
+    )
+    db.add(draft)
 
-    if result.get("success"):
-        enrollment.messages_in_phase = (enrollment.messages_in_phase or 0) + 1
-        enrollment.total_messages_sent = (enrollment.total_messages_sent or 0) + 1
-        enrollment.last_step_completed_at = datetime.utcnow()
+    # Pause enrollment until draft is approved
+    enrollment.status = EnrollmentStatus.PAUSED.value
+    enrollment.next_step_due_at = None
 
-        # Store message in enrollment history
-        msg_key = f"pipeline_{phase}_{enrollment.messages_in_phase}"
-        enrollment.store_message(msg_key, message)
-
-        lead.last_message_at = datetime.utcnow()
-        if lead.status == LeadStatus.CONNECTED.value:
-            lead.status = LeadStatus.IN_CONVERSATION.value
-
-        logger.info(
-            f"[Pipeline] Sent {phase} message to {lead.display_name} "
-            f"(msg #{enrollment.messages_in_phase} in phase, total #{enrollment.total_messages_sent})"
-        )
-    else:
-        logger.error(
-            f"[Pipeline] Failed to send {phase} message to {lead.display_name}: "
-            f"{result.get('error')}"
-        )
+    logger.info(
+        f"[Pipeline] Draft created for {lead.display_name} "
+        f"(phase={phase}, draft_id={draft.id}). Enrollment paused pending approval."
+    )
 
 
 # ── Time-Based Phase Processing ──────────────────────────────

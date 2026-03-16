@@ -342,10 +342,13 @@ async def scheduler_loop():
     Phase 1 (every tick / 30s): Send automatic invitations
     Phase 2 (every tick / 30s): Process due sequence actions
     Phase 3 (every ~60 ticks / ~30min): Detect connection acceptances
-    Phase 4 (every ~60 ticks / ~30min, offset): Detect replies
+    Phase 4 (every ~60 ticks / ~30min, offset): Detect classic replies
+    Phase 5 (every ~60 ticks / ~30min, offset): Detect Smart Pipeline replies
+    Phase 6 (every ~60 ticks / ~30min, offset): Process pipeline time-based phases
     """
     global _scheduler_running
     from .sequence_scheduler import process_sequence_actions, detect_connection_changes, detect_replies
+    from .pipeline_scheduler import detect_pipeline_replies, process_time_based_phases
 
     logger.info("[Scheduler] Starting combined scheduler (invitations + sequences)")
 
@@ -395,6 +398,22 @@ async def scheduler_loop():
                     await detect_replies(db)
                 except Exception as e:
                     logger.error(f"[Scheduler] Error detecting replies: {e}", exc_info=True)
+
+            # Phase 5: Detect Smart Pipeline replies (every ~30 min, offset from Phase 4)
+            if tick_count % 60 == 45:
+                try:
+                    logger.info(f"[Scheduler] Tick {tick_count}: running pipeline reply detection")
+                    await detect_pipeline_replies(db)
+                except Exception as e:
+                    logger.error(f"[Scheduler] Error in pipeline reply detection: {e}", exc_info=True)
+
+            # Phase 6: Process time-based pipeline phases (every ~30 min, offset)
+            if tick_count % 60 == 15:
+                try:
+                    logger.info(f"[Scheduler] Tick {tick_count}: processing pipeline time-based phases")
+                    await process_time_based_phases(db)
+                except Exception as e:
+                    logger.error(f"[Scheduler] Error in pipeline time phases: {e}", exc_info=True)
 
             # Log heartbeat every 20 ticks (~10 min)
             if tick_count % 20 == 0:

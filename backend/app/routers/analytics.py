@@ -3,6 +3,7 @@ Analytics router for dashboard data and reporting.
 """
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -222,7 +223,6 @@ def get_activity_timeline(
         conn_by_date[str(row.date)] = row.connections
 
     # Build daily timeline (using Spanish timezone for correct day boundaries)
-    from zoneinfo import ZoneInfo
     now_local = datetime.now(ZoneInfo("Europe/Madrid"))
     timeline = []
     for i in range(days):

@@ -843,11 +843,15 @@ async def detect_replies(db: Session):
     Called every 5 minutes (offset from connection detection).
     """
     # Find active enrollments where lead has a chat_id
+    # Only check classic sequences - smart_pipeline enrollments are handled by detect_pipeline_replies
     active = db.query(SequenceEnrollment).join(
         Lead, SequenceEnrollment.lead_id == Lead.id
+    ).join(
+        Sequence, SequenceEnrollment.sequence_id == Sequence.id
     ).filter(
         SequenceEnrollment.status == EnrollmentStatus.ACTIVE.value,
-        Lead.linkedin_chat_id.isnot(None)
+        Lead.linkedin_chat_id.isnot(None),
+        Sequence.sequence_mode != SequenceMode.SMART_PIPELINE.value,
     ).all()
 
     if not active:

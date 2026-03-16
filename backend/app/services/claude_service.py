@@ -615,6 +615,105 @@ Write the message:"""
 
         return result
 
+    def analyze_phase_response(
+        self,
+        conversation_history: str,
+        current_phase: str,
+        lead_data: dict,
+        sender_context: dict,
+        messages_in_phase: int = 0,
+    ) -> dict:
+        """
+        Analyze a lead's reply in the context of the current pipeline phase.
+        Returns outcome (advance/stay/nurture/meeting/park/exit), next_phase, sentiment, etc.
+        """
+        system_prompt = (
+            "You are an AI sales strategist analyzing a LinkedIn conversation for a smart outreach pipeline.\n\n"
+            "You must analyze the lead's latest reply and decide the next action.\n\n"
+            "PHASES (in order):\n"
+            "1. APERTURA: Opening. Goal is to start a genuine conversation.\n"
+            "2. CALIFICACION: Qualification. Goal is to discover pain points naturally.\n"
+            "3. VALOR: Value. Goal is to connect their pain to a potential solution.\n"
+            "4. NURTURE: Stay on radar. Light value-add messages every few weeks.\n"
+            "5. REACTIVACION: Last attempt after long silence.\n\n"
+            "OUTCOMES you can choose:\n"
+            "- \"advance\": The lead's response warrants moving to the next phase.\n"
+            "- \"stay\": The lead responded but we should stay in the same phase and continue the conversation.\n"
+            "- \"nurture\": The lead is not ready but did not reject us. Move to nurture for long-term follow-up.\n"
+            "- \"meeting\": The lead agreed to a meeting or call. Pipeline complete!\n"
+            "- \"park\": The lead is not a good fit or showed no interest. Park for now.\n"
+            "- \"exit\": The lead explicitly rejected or asked to stop. End the pipeline.\n\n"
+            "IMPORTANT: Respond ONLY with valid JSON. No markdown, no explanation."
+        )
+
+        user_content = (
+            f"Analyze this conversation and decide the next step.\n\n"
+            f"CURRENT PHASE: {current_phase}\n"
+            f"MESSAGES SENT IN THIS PHASE: {messages_in_phase}\n\n"
+            f"LEAD:\n"
+            f"- Name: {lead_data.get('first_name', '')} {lead_data.get('last_name', '')}\n"
+            f"- Title: {lead_data.get('job_title', '')}\n"
+            f"- Company: {lead_data.get('company_name', '')}\n"
+            f"- Industry: {lead_data.get('company_industry', '')}\n\n"
+            f"CONVERSATION:\n{conversation_history}\n\n"
+            "Respond with this JSON structure:\n"
+            "{\n"
+            '    "outcome": "advance|stay|nurture|meeting|park|exit",\n'
+            '    "next_phase": "calificacion|valor|nurture|null",\n'
+            '    "sentiment": "positive|neutral|cautious|negative",\n'
+            '    "signal_strength": "strong|moderate|weak|none",\n'
+            '    "buying_signals": ["list of detected signals or empty"],\n'
+            '    "reasoning": "brief explanation of why this outcome"\n'
+            "}"
+        )
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=500,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_content}]
+            )
+
+            text = response.content[0].text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+
+            import json as json_mod
+            return json_mod.loads(text)
+        except Exception as e:
+            logger.error(f"[Claude] analyze_phase_response error: {e}")
+            return {
+                "outcome": "stay",
+                "next_phase": None,
+                "sentiment": "neutral",
+                "signal_strength": "none",
+                "buying_signals": [],
+                "reasoning": f"Analysis failed: {e}",
+            }
+
+    def generate_phase_message(
+        self,
+        phase: str,
+        lead_data: dict,
+        sender_context: dict,
+        conversation_history: str,
+        phase_analysis: dict = None,
+        messages_in_phase: int = 0,
+    ) -> str:
+        """
+        Generate a phase-appropriate message. Delegates to generate_smart_pipeline_message.
+        """
+        return self.generate_smart_pipeline_message(
+            lead_data=lead_data,
+            sender_context=sender_context,
+            conversation_history=conversation_history,
+            current_phase=phase,
+        )
+
     def analyze_conversation_sentiment(
         self,
         conversation_text: str
