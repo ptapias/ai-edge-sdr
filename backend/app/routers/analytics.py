@@ -181,7 +181,7 @@ def get_activity_timeline(
     """Daily activity over the specified period. Only counts successful invitations."""
     days_map = {"7d": 7, "14d": 14, "30d": 30, "90d": 90}
     days = days_map.get(period, 30)
-    start_date = datetime.utcnow() - timedelta(days=days)
+    start_date = datetime.now(ZoneInfo("Europe/Madrid")).replace(tzinfo=None) - timedelta(days=days)
 
     # Only count successful invitation logs
     invitation_data = (

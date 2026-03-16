@@ -286,6 +286,7 @@ async def send_automatic_invitation(db: Session) -> dict:
     # Log the attempt
     error_msg = result.get("error") if not result.get("success") else None
     log = InvitationLog(
+        user_id=lead.user_id,
         lead_id=lead.id,
         lead_name=f"{lead.first_name} {lead.last_name}"[:200],
         lead_company=(lead.company_name or "")[:200],
