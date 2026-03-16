@@ -102,7 +102,7 @@ def list_drafts(
         DraftMessage.user_id == current_user.id
     )
     if status:
-        query = query.filter(DraftMessage.status == status)
+        query = query.filter(DraftMessage.status == status).order_by(DraftMessage.created_at.desc())
     else:
         # Default: show pending first
         query = query.order_by(

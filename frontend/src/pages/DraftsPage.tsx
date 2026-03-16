@@ -18,14 +18,14 @@ const api = {
   getDrafts: async (status?: string) => {
     const url = status ? `/api/drafts/?status=${status}` : '/api/drafts/'
     const res = await fetch(url, {
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
     })
     if (!res.ok) throw new Error('Failed to fetch drafts')
     return res.json()
   },
   getDraftCount: async () => {
     const res = await fetch('/api/drafts/count', {
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
     })
     if (!res.ok) throw new Error('Failed')
     return res.json()
@@ -34,7 +34,7 @@ const api = {
     const res = await fetch(`/api/drafts/${id}/approve`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ message: message || undefined })
@@ -49,7 +49,7 @@ const api = {
     const res = await fetch(`/api/drafts/${id}/reject`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ reason })
@@ -60,7 +60,7 @@ const api = {
   regenerateDraft: async (id: string) => {
     const res = await fetch(`/api/drafts/${id}/regenerate`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
     })
     if (!res.ok) throw new Error('Failed to regenerate')
     return res.json()
