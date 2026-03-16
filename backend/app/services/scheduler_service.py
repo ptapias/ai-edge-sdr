@@ -284,17 +284,18 @@ async def send_automatic_invitation(db: Session) -> dict:
     error_category_str = result.get("error_category") if not result.get("success") else None
 
     # Log the attempt
+    error_msg = result.get("error") if not result.get("success") else None
     log = InvitationLog(
         lead_id=lead.id,
-        lead_name=f"{lead.first_name} {lead.last_name}",
-        lead_company=lead.company_name,
-        lead_job_title=lead.job_title,
-        lead_linkedin_url=lead.linkedin_url,
+        lead_name=f"{lead.first_name} {lead.last_name}"[:200],
+        lead_company=(lead.company_name or "")[:200],
+        lead_job_title=(lead.job_title or "")[:200],
+        lead_linkedin_url=(lead.linkedin_url or "")[:500],
         message_preview=lead.linkedin_message[:300] if lead.linkedin_message else None,
         campaign_id=lead.campaign_id,
-        campaign_name=campaign_name,
+        campaign_name=(campaign_name or "")[:200],
         success=result.get("success", False),
-        error_message=result.get("error") if not result.get("success") else None,
+        error_message=error_msg[:490] if error_msg else None,
         error_category=error_category_str,
         mode="automatic"
     )

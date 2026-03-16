@@ -364,10 +364,15 @@ def get_invitation_stats(
     db: Session = Depends(get_db)
 ):
     """Get invitation statistics for the authenticated user."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Europe/Madrid")
+    now_local = datetime.now(tz)
+    today_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Convert to UTC for DB queries
+    today_start = today_start_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    week_start = today_start - timedelta(days=now_local.weekday())
+    month_start = today_start_local.replace(day=1).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
     now = datetime.utcnow()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = today_start - timedelta(days=now.weekday())
-    month_start = today_start.replace(day=1)
 
     # Base query filtered by user
     base_query = db.query(InvitationLog).filter(InvitationLog.user_id == current_user.id)

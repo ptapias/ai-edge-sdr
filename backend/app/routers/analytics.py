@@ -221,10 +221,12 @@ def get_activity_timeline(
     for row in connection_data:
         conn_by_date[str(row.date)] = row.connections
 
-    # Build daily timeline
+    # Build daily timeline (using Spanish timezone for correct day boundaries)
+    from zoneinfo import ZoneInfo
+    now_local = datetime.now(ZoneInfo("Europe/Madrid"))
     timeline = []
     for i in range(days):
-        date = (datetime.utcnow() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+        date = (now_local - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
         timeline.append({
             "date": date,
             "invitations": inv_by_date.get(date, 0),
