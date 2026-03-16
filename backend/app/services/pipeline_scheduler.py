@@ -392,6 +392,15 @@ async def _generate_and_send(
         messages_in_phase=enrollment.messages_in_phase or 0,
     )
 
+    # Extract analysis context for the draft
+    import json as _json
+    lead_reply = enrollment.last_response_text or ""
+    analysis_sentiment = phase_analysis.get("sentiment") if phase_analysis else None
+    analysis_signal = phase_analysis.get("signal_strength") if phase_analysis else None
+    analysis_signals = _json.dumps(phase_analysis.get("buying_signals", [])) if phase_analysis else None
+    analysis_reasoning = phase_analysis.get("reasoning") if phase_analysis else None
+    analysis_outcome = phase_analysis.get("outcome") if phase_analysis else None
+
     # Create a draft for user approval instead of sending directly
     draft = DraftMessage(
         enrollment_id=str(enrollment.id),
@@ -400,6 +409,12 @@ async def _generate_and_send(
         user_id=str(enrollment.user_id),
         pipeline_phase=phase,
         generated_message=message,
+        lead_reply_text=lead_reply,
+        analysis_sentiment=analysis_sentiment,
+        analysis_signal_strength=analysis_signal,
+        analysis_buying_signals=analysis_signals,
+        analysis_reasoning=analysis_reasoning,
+        analysis_outcome=analysis_outcome,
         status=DraftStatus.PENDING.value,
     )
     db.add(draft)

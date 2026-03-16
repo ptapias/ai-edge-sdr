@@ -75,6 +75,13 @@ def _draft_to_response(draft: DraftMessage, lead: Lead, sequence: Sequence) -> d
         "lead_company": lead.company_name if lead else None,
         "lead_job_title": lead.job_title if lead else None,
         "sequence_name": sequence.name if sequence else "Unknown",
+        # Context fields
+        "lead_reply_text": draft.lead_reply_text,
+        "analysis_sentiment": draft.analysis_sentiment,
+        "analysis_signal_strength": draft.analysis_signal_strength,
+        "analysis_buying_signals": draft.analysis_buying_signals,
+        "analysis_reasoning": draft.analysis_reasoning,
+        "analysis_outcome": draft.analysis_outcome,
     }
 
 

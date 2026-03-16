@@ -11,6 +11,11 @@ import {
   Clock,
   User,
   Building2,
+  MessageCircle,
+  Brain,
+  TrendingUp,
+  TrendingDown,
+  Minus,
 } from 'lucide-react'
 
 // API functions
@@ -108,6 +113,26 @@ interface Draft {
   lead_company: string | null
   lead_job_title: string | null
   sequence_name: string
+  lead_reply_text: string | null
+  analysis_sentiment: string | null
+  analysis_signal_strength: string | null
+  analysis_buying_signals: string | null
+  analysis_reasoning: string | null
+  analysis_outcome: string | null
+}
+
+const SENTIMENT_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
+  positive: { label: 'Positivo', color: 'text-green-600 bg-green-50 border-green-200', icon: 'up' },
+  neutral: { label: 'Neutral', color: 'text-gray-600 bg-gray-50 border-gray-200', icon: 'flat' },
+  cautious: { label: 'Cauteloso', color: 'text-amber-600 bg-amber-50 border-amber-200', icon: 'flat' },
+  negative: { label: 'Negativo', color: 'text-red-600 bg-red-50 border-red-200', icon: 'down' },
+}
+
+const SIGNAL_CONFIG: Record<string, { label: string; color: string }> = {
+  strong: { label: 'Fuerte', color: 'text-green-700 bg-green-100' },
+  moderate: { label: 'Moderada', color: 'text-yellow-700 bg-yellow-100' },
+  weak: { label: 'Débil', color: 'text-orange-700 bg-orange-100' },
+  none: { label: 'Sin señales', color: 'text-gray-500 bg-gray-100' },
 }
 
 export default function DraftsPage() {
@@ -258,11 +283,77 @@ export default function DraftsPage() {
                 {/* Expanded content */}
                 {isExpanded && (
                   <div className="border-t p-4">
-                    <div className="flex items-center gap-2 mb-2 text-sm text-gray-500">
+                    <div className="flex items-center gap-2 mb-3 text-sm text-gray-500">
                       <User className="w-4 h-4" />
                       <span>{draft.lead_name}</span>
                       {draft.lead_job_title && <span>· {draft.lead_job_title}</span>}
                       <span>· Secuencia: {draft.sequence_name}</span>
+                    </div>
+
+                    {/* Lead's reply */}
+                    {draft.lead_reply_text && (
+                      <div className="mb-4 border border-gray-200 rounded-lg overflow-hidden">
+                        <div className="bg-gray-50 px-3 py-2 flex items-center gap-2 text-xs font-medium text-gray-500 border-b">
+                          <MessageCircle className="w-3.5 h-3.5" />
+                          Mensaje de {draft.lead_name}
+                        </div>
+                        <div className="p-3 text-sm bg-white whitespace-pre-wrap">
+                          {draft.lead_reply_text}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* AI Analysis */}
+                    {draft.analysis_sentiment && (
+                      <div className="mb-4 border border-indigo-100 rounded-lg overflow-hidden">
+                        <div className="bg-indigo-50 px-3 py-2 flex items-center gap-2 text-xs font-medium text-indigo-600 border-b border-indigo-100">
+                          <Brain className="w-3.5 h-3.5" />
+                          Análisis IA de la conversación
+                        </div>
+                        <div className="p-3 bg-white">
+                          <div className="flex flex-wrap gap-2 mb-2">
+                            {/* Sentiment badge */}
+                            {(() => {
+                              const cfg = SENTIMENT_CONFIG[draft.analysis_sentiment || ''] || SENTIMENT_CONFIG.neutral
+                              return (
+                                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${cfg.color}`}>
+                                  {cfg.icon === 'up' && <TrendingUp className="w-3 h-3" />}
+                                  {cfg.icon === 'down' && <TrendingDown className="w-3 h-3" />}
+                                  {cfg.icon === 'flat' && <Minus className="w-3 h-3" />}
+                                  Sentimiento: {cfg.label}
+                                </span>
+                              )
+                            })()}
+                            {/* Signal strength badge */}
+                            {draft.analysis_signal_strength && (() => {
+                              const cfg = SIGNAL_CONFIG[draft.analysis_signal_strength] || SIGNAL_CONFIG.none
+                              return (
+                                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${cfg.color}`}>
+                                  Señal de compra: {cfg.label}
+                                </span>
+                              )
+                            })()}
+                            {/* Outcome badge */}
+                            {draft.analysis_outcome && (
+                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-600">
+                                Acción: {draft.analysis_outcome}
+                              </span>
+                            )}
+                          </div>
+                          {/* Reasoning */}
+                          {draft.analysis_reasoning && (
+                            <p className="text-sm text-gray-600 mt-1 italic">
+                              {draft.analysis_reasoning}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Generated response label */}
+                    <div className="mb-2 flex items-center gap-2 text-xs font-medium text-gray-500">
+                      <Send className="w-3.5 h-3.5" />
+                      Respuesta generada
                     </div>
 
                     {draft.status === 'pending' ? (

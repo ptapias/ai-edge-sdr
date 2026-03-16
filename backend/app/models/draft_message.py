@@ -36,6 +36,16 @@ class DraftMessage(Base):
     generated_message = Column(Text, nullable=False)
     final_message = Column(Text, nullable=True)  # User-edited version
 
+    # Lead reply context
+    lead_reply_text = Column(Text, nullable=True)
+
+    # AI analysis
+    analysis_sentiment = Column(String(20), nullable=True)
+    analysis_signal_strength = Column(String(20), nullable=True)
+    analysis_buying_signals = Column(Text, nullable=True)  # JSON list
+    analysis_reasoning = Column(Text, nullable=True)
+    analysis_outcome = Column(String(20), nullable=True)
+
     # Status
     status = Column(String(20), default=DraftStatus.PENDING.value, index=True)
 
