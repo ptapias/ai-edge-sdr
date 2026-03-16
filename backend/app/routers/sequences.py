@@ -477,6 +477,16 @@ async def enroll_leads(
             next_step_due_at=datetime.utcnow(),  # Execute first step immediately
             user_id=current_user.id,
         )
+
+        # Smart Pipeline: always initialize phase
+        if sequence.sequence_mode == SequenceMode.SMART_PIPELINE.value:
+            enrollment.current_phase = PipelinePhase.APERTURA.value
+            enrollment.phase_entered_at = datetime.utcnow()
+            enrollment.messages_in_phase = 0
+            # If lead is already connected, pipeline can start immediately
+            if lead.linkedin_chat_id:
+                enrollment.next_step_due_at = datetime.utcnow()
+
         db.add(enrollment)
 
         # Mark lead as in sequence
