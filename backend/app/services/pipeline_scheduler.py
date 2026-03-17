@@ -198,6 +198,12 @@ async def detect_pipeline_replies(db: Session):
             enrollment.last_response_at = latest_inbound_time
             enrollment.last_response_text = inbound_text
 
+            # Update lead status: they replied, so mark as in_conversation
+            if lead.status in (LeadStatus.CONNECTED.value, LeadStatus.INVITATION_SENT.value):
+                lead.status = LeadStatus.IN_CONVERSATION.value
+            lead.awaiting_reply = False
+            lead.last_message_at = latest_inbound_time
+
             # Format full conversation for Claude
             conversation_history = _format_conversation(msg_result.get("data", {}))
 
